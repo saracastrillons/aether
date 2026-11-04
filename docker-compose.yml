@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: aether, POSTGRES_PASSWORD: aether, POSTGRES_DB: aether }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U aether"], interval: 5s, retries: 10 }
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg2://aether:aether@postgres:5432/aether
+      AETHER_SECRET: ${AETHER_SECRET:?set AETHER_SECRET (48+ chars) in your shell or .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports: ["8000:8000"]
+    depends_on: { postgres: { condition: service_healthy } }
+volumes: { pgdata: {} }

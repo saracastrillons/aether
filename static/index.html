@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AETHER — Explainable AI Business Intelligence</title>
+  <meta name="description" content="AETHER turns business data into explainable decisions: forecasting with backtesting, anomaly detection, churn ML and an AI analyst that shows its work." />
+  <meta name="theme-color" content="#05060a" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23a78bfa'/%3E%3Cstop offset='1' stop-color='%2322d3ee'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='%2305060a'/%3E%3Cpath d='M16 6 26 26H21.5L16 14.5 10.5 26H6Z' fill='url(%23g)'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/aether.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div id="toasts" aria-live="polite"></div>
+
+  <!-- ===================== LANDING ===================== -->
+  <div id="landing">
+    <header class="lnav">
+      <a class="brand" href="#top"><span class="mark"></span>AETHER</a>
+      <nav class="lnav-links">
+        <a href="#features">Platform</a><a href="#how">How it works</a><a href="#stack">Engineering</a>
+      </nav>
+      <div class="lnav-cta">
+        <button class="btn ghost sm" data-auth="in">Sign in</button>
+        <button class="btn primary sm" data-demo>Live demo</button>
+      </div>
+    </header>
+
+    <section class="hero" id="top">
+      <canvas id="field" aria-hidden="true"></canvas>
+      <div class="hero-glow" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <a class="pill-link reveal" href="#how"><span class="dot live"></span>Explainable analytics engine · v1.0</a>
+        <h1 class="hero-title reveal">Business decisions<br />you can <em>explain.</em></h1>
+        <p class="hero-sub reveal">AETHER turns raw sales data into forecasts, anomalies and churn risk — and an AI analyst that shows every query, formula and assumption behind its answers.</p>
+        <div class="hero-cta reveal">
+          <button class="btn primary lg" data-demo>Launch live demo <span class="kbd-arrow">→</span></button>
+          <button class="btn ghost lg" data-auth="reg">Create your workspace</button>
+        </div>
+        <p class="hero-note reveal">No sign-up needed · demo company “Nimbus Retail” · 24 months of data</p>
+      </div>
+
+      <div class="preview-wrap reveal" id="preview">
+        <div class="preview">
+          <div class="pv-bar"><i></i><i></i><i></i><span>aether.app/overview</span></div>
+          <div class="pv-body">
+            <div class="pv-side"><b></b><b class="on"></b><b></b><b></b><b></b><b></b></div>
+            <div class="pv-main">
+              <div class="pv-kpis">
+                <div><small>Revenue · TTM</small><strong>$3.57M</strong><em class="up">▲ 25.5%</em></div>
+                <div><small>Customers</small><strong>3,471</strong><em class="up">▲ 3.1%</em></div>
+                <div><small>Forecast · next</small><strong>$304.7K</strong><em>MAPE 8.2%</em></div>
+                <div><small>Churn AUC</small><strong>0.86</strong><em>holdout</em></div>
+              </div>
+              <div class="pv-chart">
+                <svg viewBox="0 0 600 180" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="pvg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cf6" stop-opacity=".45"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></linearGradient>
+                  </defs>
+                  <path d="M0 150 C40 140 60 132 90 128 S150 112 180 108 240 96 270 90 330 70 360 66 400 120 420 118 470 60 500 52 L500 180 0 180Z" fill="url(#pvg)"/>
+                  <path class="pv-line" d="M0 150 C40 140 60 132 90 128 S150 112 180 108 240 96 270 90 330 70 360 66 400 120 420 118 470 60 500 52" fill="none" stroke="#a78bfa" stroke-width="2.5"/>
+                  <path d="M500 52 C530 46 560 40 600 30 L600 12 C560 22 530 30 500 52 C530 60 560 58 600 50Z" fill="#22d3ee" opacity=".12"/>
+                  <path d="M500 52 C530 46 560 40 600 30" fill="none" stroke="#22d3ee" stroke-width="2.5" stroke-dasharray="6 6"/>
+                  <circle cx="410" cy="120" r="5" fill="#fb7185"/><circle cx="410" cy="120" r="12" fill="#fb7185" opacity=".2"><animate attributeName="r" values="6;16;6" dur="2.4s" repeatCount="indefinite"/></circle>
+                </svg>
+              </div>
+              <div class="pv-chat">
+                <span class="pv-q">Why did revenue decline in September?</span>
+                <span class="pv-a"><b>−24.0%</b> vs August. Largest contributions: <b>Online</b> (−59%) and plan <b>Pro</b> (−32%).<code>SELECT region, product, SUM(revenue) … GROUP BY 1,2</code></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="strip">
+      <div class="marquee"><div>
+        <span>FastAPI</span><span>SQLAlchemy 2.0</span><span>PostgreSQL</span><span>NumPy</span><span>JWT · HS256</span><span>PBKDF2 · 200k</span><span>RBAC</span><span>Multi-tenant</span><span>Chart.js</span><span>Claude API</span><span>Pytest</span><span>Docker</span>
+        <span>FastAPI</span><span>SQLAlchemy 2.0</span><span>PostgreSQL</span><span>NumPy</span><span>JWT · HS256</span><span>PBKDF2 · 200k</span><span>RBAC</span><span>Multi-tenant</span><span>Chart.js</span><span>Claude API</span><span>Pytest</span><span>Docker</span>
+      </div></div>
+    </section>
+
+    <section class="section" id="features">
+      <p class="eyebrow reveal">The platform</p>
+      <h2 class="h2 reveal">From spreadsheet to <em>decision</em>,<br />with the math in plain sight.</h2>
+      <div class="bento">
+        <article class="card b-wide reveal">
+          <div class="b-icon" data-i="lab"></div>
+          <h3>Forecast Lab</h3>
+          <p>Four models — OLS with Fourier seasonality, Holt smoothing, seasonal naive and naive — compete in rolling-origin cross-validation. The winner is chosen by backtested MAPE, not by vibes.</p>
+          <div class="b-vis bars"><i style="--h:38%"></i><i style="--h:62%"></i><i style="--h:71%"></i><i style="--h:92%" class="win"></i></div>
+        </article>
+        <article class="card reveal">
+          <div class="b-icon" data-i="spark"></div>
+          <h3>Explainable AI analyst</h3>
+          <p>Ask in plain language. Every answer ships with the SQL, formulas and sources used — optionally narrated by Claude, never with invented numbers.</p>
+        </article>
+        <article class="card reveal">
+          <div class="b-icon" data-i="pulse"></div>
+          <h3>Robust anomaly detection</h3>
+          <p>Median/MAD z-scores on growth flag outliers and attribute them to the region that moved the most.</p>
+        </article>
+        <article class="card reveal">
+          <div class="b-icon" data-i="users"></div>
+          <h3>Churn risk model</h3>
+          <p>Logistic regression with a 30% holdout: ROC/AUC, confusion matrix, per-customer drivers and next-best actions.</p>
+        </article>
+        <article class="card reveal">
+          <div class="b-icon" data-i="sliders"></div>
+          <h3>Scenario simulator</h3>
+          <p>Move price, marketing and churn; see the forecast and a revenue bridge recompute live.</p>
+        </article>
+        <article class="card b-wide reveal">
+          <div class="b-icon" data-i="shield"></div>
+          <h3>Built like a real SaaS</h3>
+          <p>Multi-tenant organizations, admin / analyst / viewer roles enforced by the API, expiring invite links, audit log, login throttling, security headers and an automated test suite.</p>
+          <div class="b-vis roles"><span>admin</span><span>analyst</span><span>viewer</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="how">
+      <p class="eyebrow reveal">How it works</p>
+      <h2 class="h2 reveal">A transparent pipeline,<br />end to end.</h2>
+      <ol class="pipeline">
+        <li class="reveal"><span>01</span><h4>Ingest</h4><p>Upload a CSV or start from demo data. Each organization's data is isolated.</p></li>
+        <li class="reveal"><span>02</span><h4>Validate</h4><p>Schema checks, deduplication and a data-quality score before anything is modeled.</p></li>
+        <li class="reveal"><span>03</span><h4>Model</h4><p>Backtested forecasts, anomaly scoring and a churn classifier, recomputed on every change.</p></li>
+        <li class="reveal"><span>04</span><h4>Explain</h4><p>Insights, an AI analyst with its reasoning visible, and a one-click executive report.</p></li>
+      </ol>
+    </section>
+
+    <section class="section" id="stack">
+      <div class="eng card reveal">
+        <div>
+          <p class="eyebrow">Engineering</p>
+          <h2 class="h2 sm">No black boxes.</h2>
+          <p class="mu">The analytics engine is plain NumPy you can read in one sitting. The API is documented with OpenAPI and covered by tests.</p>
+          <div class="hero-cta left">
+            <a class="btn ghost" href="/docs" target="_blank" rel="noopener">Open API docs ↗</a>
+            <button class="btn primary" data-demo>Try it now</button>
+          </div>
+        </div>
+        <pre class="code"><span class="c"># analytics.py — rolling-origin backtest</span>
+<span class="k">def</span> <span class="fn">backtest</span>(series, h=<span class="n">3</span>, folds=<span class="n">4</span>):
+    y = np.asarray(series, float)
+    <span class="k">for</span> key, (label, fn) <span class="k">in</span> MODELS.items():
+        errs = [_metrics(y[o:o+h], fn(y[:o], h)[<span class="n">0</span>])
+                <span class="k">for</span> o <span class="k">in</span> origins]
+    <span class="k">return</span> <span class="fn">sorted</span>(out, key=<span class="k">lambda</span> k: out[k][<span class="s">"mape"</span>])</pre>
+      </div>
+    </section>
+
+    <section class="final">
+      <h2 class="h2 reveal">See it with your own data.</h2>
+      <div class="hero-cta reveal">
+        <button class="btn primary lg" data-demo>Launch live demo →</button>
+        <button class="btn ghost lg" data-auth="reg">Create workspace</button>
+      </div>
+    </section>
+
+    <footer class="lfoot">
+      <span class="brand sm"><span class="mark"></span>AETHER</span>
+      <span class="mu" id="credit"></span>
+      <span class="mu"><a href="/docs" target="_blank" rel="noopener">API</a> · <a href="/api/health" target="_blank" rel="noopener">Status</a></span>
+    </footer>
+  </div>
+
+  <!-- ===================== AUTH ===================== -->
+  <div class="modal" id="auth" role="dialog" aria-modal="true" aria-labelledby="auth-title" hidden>
+    <div class="modal-card auth">
+      <button class="icon-btn close" data-close aria-label="Close">✕</button>
+      <span class="brand"><span class="mark"></span>AETHER</span>
+      <h2 id="auth-title">Welcome back</h2>
+      <p class="mu" id="auth-sub">Sign in to your workspace.</p>
+      <div class="seg" id="auth-tabs"><button data-m="in" class="on">Sign in</button><button data-m="reg">Create organization</button></div>
+      <form id="auth-form" autocomplete="on">
+        <label class="f reg-only"><span>Organization</span><input id="f-org" placeholder="Acme Inc." /></label>
+        <label class="f reg-only"><span>Work email</span><input id="f-email" type="email" placeholder="you@company.com" /></label>
+        <label class="f"><span>Username</span><input id="f-user" autocomplete="username" placeholder="username" required /></label>
+        <label class="f"><span>Password</span><input id="f-pass" type="password" autocomplete="current-password" placeholder="••••••••" required /></label>
+        <p class="err" id="auth-err" role="alert"></p>
+        <button class="btn primary block" id="auth-go" type="submit">Sign in →</button>
+      </form>
+      <div class="demo-accts" id="demo-accts">
+        <span class="mu">Or explore as</span>
+        <button class="chip" data-as="demo">Admin</button><button class="chip" data-as="analyst">Analyst</button><button class="chip" data-as="viewer">Viewer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== APP ===================== -->
+  <div id="app" hidden>
+    <aside class="side" id="side">
+      <div class="side-top">
+        <a class="brand" href="#/overview"><span class="mark"></span>AETHER</a>
+        <button class="icon-btn mobile-only" data-close-side aria-label="Close menu">✕</button>
+      </div>
+      <div class="org-card"><div class="avatar" id="org-av"></div><div><b id="org-name"></b><small id="org-mode"></small></div></div>
+      <nav class="side-nav" id="side-nav"></nav>
+      <div class="side-foot">
+        <div class="me"><div class="avatar sm" id="me-av"></div><div><b id="me-name"></b><small id="me-role"></small></div></div>
+        <div class="side-actions">
+          <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"></button>
+          <button class="icon-btn" id="logout-btn" title="Sign out" aria-label="Sign out"></button>
+        </div>
+      </div>
+    </aside>
+    <div class="scrim" data-close-side></div>
+
+    <div class="shell">
+      <header class="top">
+        <button class="icon-btn mobile-only" id="menu-btn" aria-label="Open menu"></button>
+        <div class="crumbs"><h1 id="v-title">Overview</h1><p id="v-sub"></p></div>
+        <button class="search" id="cmd-btn"><span class="ic" data-i="search"></span><span>Search or jump to…</span><kbd>Ctrl K</kbd></button>
+        <div class="top-actions">
+          <div class="status-pill" id="status-pill"><span class="dot live"></span><span>Live</span></div>
+          <div class="pop-wrap">
+            <button class="icon-btn" id="bell-btn" aria-label="Notifications"><span class="badge" id="bell-n" hidden></span></button>
+            <div class="pop" id="bell-pop" hidden></div>
+          </div>
+        </div>
+      </header>
+      <main id="view" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <!-- ===================== COMMAND PALETTE ===================== -->
+  <div class="modal" id="cmdk" hidden>
+    <div class="modal-card cmdk" role="dialog" aria-label="Command palette">
+      <div class="cmdk-in"><span class="ic" data-i="search"></span><input id="cmdk-q" placeholder="Type a command, a page or ask a question…" autocomplete="off" /><kbd>Esc</kbd></div>
+      <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
+      <div class="cmdk-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> select</span></div>
+    </div>
+  </div>
+</body>
+</html>

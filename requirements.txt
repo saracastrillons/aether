@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+numpy
+sqlalchemy>=2.0
+psycopg2-binary
+anthropic
