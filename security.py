@@ -11,6 +11,7 @@ if not SECRET_VALUE or len(SECRET_VALUE) < 48:
 
 SECRET = SECRET_VALUE.encode()
 
+TOKEN_TTL = 8 * 3600   # seconds; the client renews the token while the user is active
 ORG: ContextVar[int] = ContextVar("org", default=0)   # organization of the current request
 b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 _sig = lambda msg: b64(hmac.new(SECRET, msg.encode(), hashlib.sha256).digest())
@@ -24,7 +25,7 @@ def check_pw(pw, stored):
 
 def make_token(sub, role, org, org_name):
     h = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    p = b64(json.dumps({"sub": sub, "role": role, "org": org, "org_name": org_name, "exp": int(time.time()) + 3600}).encode())
+    p = b64(json.dumps({"sub": sub, "role": role, "org": org, "org_name": org_name, "exp": int(time.time()) + TOKEN_TTL}).encode())
     return f"{h}.{p}.{_sig(h + '.' + p)}"
 
 async def auth(authorization: str = Header(None)):

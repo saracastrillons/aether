@@ -147,3 +147,27 @@ def delete_alert(org, aid):
         if not a or a.org_id != org: return False
         s.delete(a)
         return True
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(Integer, index=True)
+    ext_id: Mapped[str] = mapped_column(String(60))
+    tenure: Mapped[float] = mapped_column()
+    orders: Mapped[float] = mapped_column()
+    tickets: Mapped[float] = mapped_column()
+    idle: Mapped[float] = mapped_column()
+    churned: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+def load_customers(org):
+    with Session() as s:
+        q = select(Customer).where(Customer.org_id == org).order_by(Customer.id)
+        return [dict(ext_id=c.ext_id, tenure=c.tenure, orders=c.orders, tickets=c.tickets, idle=c.idle, churned=c.churned) for c in s.scalars(q)]
+
+
+def replace_customers(org, rows):
+    with Session.begin() as s:
+        s.execute(delete(Customer).where(Customer.org_id == org))
+        s.add_all(Customer(org_id=org, **r) for r in rows)

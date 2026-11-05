@@ -231,6 +231,23 @@
     </div>
   </div>
 
+  <!-- ===================== ACCOUNT ===================== -->
+  <div class="modal" id="acct" role="dialog" aria-modal="true" aria-labelledby="acct-title" hidden>
+    <div class="modal-card auth">
+      <button class="icon-btn close" data-close-acct aria-label="Close">✕</button>
+      <h2 id="acct-title">Your account</h2>
+      <div class="list" id="acct-info"></div>
+      <form id="acct-form" autocomplete="on">
+        <p class="mu" style="margin:6px 0 0">Change password</p>
+        <input type="text" autocomplete="username" hidden />
+        <label class="f"><span>Current password</span><input id="pw-cur" type="password" autocomplete="current-password" required /></label>
+        <label class="f"><span>New password</span><input id="pw-new" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" required /></label>
+        <p class="err" id="acct-err" role="alert"></p>
+        <button class="btn primary block" type="submit">Update password</button>
+      </form>
+    </div>
+  </div>
+
   <!-- ===================== COMMAND PALETTE ===================== -->
   <div class="modal" id="cmdk" hidden>
     <div class="modal-card cmdk" role="dialog" aria-label="Command palette">

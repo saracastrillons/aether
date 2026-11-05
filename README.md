@@ -11,13 +11,13 @@ AETHER turns raw sales data into forecasts, anomalies and churn risk, plus an AI
 | Area | What it does |
 | --- | --- |
 | **Overview** | KPI cards with sparklines, revenue with a 90% forecast band and anomaly markers, auto-generated insights, regional heatmap, product mix |
-| **AI Analyst** | Natural-language questions mapped to analysis intents (driver analysis, rankings, forecast, anomalies, summary). Every answer includes its **reasoning trace** (SQL + formulas), sources and a chart. Optional Claude narration that is only allowed to restate the numbers the engine computed |
+| **AI Analyst** | With an Anthropic API key, Claude works as an **agent with analytics tools** (aggregate revenue, explain a change, forecast, simulate a scenario, churn risk): it plans the analysis, the engine computes every number, and each tool call appears in the reasoning trace. It answers in the user's language and remembers the conversation. Without a key, a deterministic intent engine answers (drivers, rankings, years, best month, segments, forecast, anomalies). Rate-limited per user |
 | **Forecast Lab** | Four models (OLS trend + Fourier seasonality, Holt smoothing, seasonal naive, naive) compared with **rolling-origin cross-validation**: MAPE, RMSE, bias and holdout backtest charts. The overview uses the backtested winner |
 | **Scenarios** | What-if simulator (price, marketing, churn, elasticity, horizon) with a **revenue bridge** (waterfall) and presets |
-| **Churn Risk** | Logistic regression trained by gradient descent and evaluated on a 30% holdout: ROC/AUC, confusion matrix, precision/recall/F1, coefficients, risk segments, per-customer driver and next best action |
-| **Data** | CSV import with a validation pipeline (schema check, deduplication, invalid-row filtering, quality score), CSV export, sample file |
+| **Churn Risk** | Logistic regression trained by gradient descent **on each organization's own customers** and evaluated on a stratified 30% holdout: ROC/AUC, confusion matrix, precision/recall/F1, coefficients, risk segments, and per-customer driver and next best action for active customers |
+| **Data** | Import CSV or Excel with English or Spanish headers (`Fecha`, `Ciudad`, `Ventas`…), any delimiter, dates like `14/03/2025` or `mar-25`, amounts like `1.234,50` or `$1,234.50`. Daily rows are summed into months, and a **preview** shows how the file was understood before anything is saved |
 | **Alerts** | KPI threshold rules with templates, evaluated on every refresh and shown in the notification center |
-| **Team & Audit** | Organizations, admin / analyst / viewer roles **enforced by the API**, expiring invite links, audit log |
+| **Team & Audit** | Organizations, admin / analyst / viewer roles **enforced by the API**, expiring invite links, audit log, account settings with password change, renewable sessions. The shared public demo is protected against destructive actions |
 | **Executive Report** | A one-page, print-ready brief (Print → Save as PDF) |
 | **UX** | Animated landing page, ⌘K / Ctrl+K command palette, light/dark themes, deep links (`#/forecast`), responsive layout down to phone width |
 
@@ -29,8 +29,9 @@ static/            Single-page app (vanilla JS + Chart.js, no build step)
   css/aether.css   Design system (tokens, light/dark themes, components)
   js/app.js        Router, views, charts, analyst chat, command palette
 main.py            FastAPI app: analytics endpoints, per-organization context cache
+ingest.py          Tolerant CSV/Excel ingestion (header synonyms, dates, number formats)
 analytics.py       Pure NumPy engine: forecasting models, backtesting, anomalies, churn model, insights
-assistant.py       AI analyst: intent engine + optional Claude narration
+assistant.py       AI analyst: Claude tool-use agent + deterministic intent engine fallback
 orgs.py            Registration, login (with brute-force throttling), invites, members
 security.py        PBKDF2 password hashing, HS256 JWT, role checks
 db.py              SQLAlchemy 2.0 models (SQLite by default, PostgreSQL via DATABASE_URL)
@@ -68,7 +69,7 @@ uvicorn main:app --reload
 
 Open http://localhost:8000. The interactive API docs (OpenAPI / Swagger) are at http://localhost:8000/docs.
 
-**Optional AI narration:** set `ANTHROPIC_API_KEY` to have Claude phrase the analyst's answers. Without it, the deterministic engine answers on its own.
+**AI agent (optional):** create an API key at https://console.anthropic.com and set it before starting the server (`$env:ANTHROPIC_API_KEY = "sk-ant-..."` in PowerShell). The analyst then uses Claude (`claude-opus-5-5`) with tools. Without a key, or if the API fails, the deterministic engine answers, so the app always works.
 
 ## Docker (API + PostgreSQL)
 

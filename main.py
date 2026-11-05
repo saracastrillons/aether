@@ -1,5 +1,5 @@
 """AETHER API - explainable business intelligence."""
-import csv, io, random, re, time
+import random, re, time
 from datetime import date
 import numpy as np
 from fastapi import FastAPI, HTTPException, Depends, Request
@@ -7,11 +7,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from db import (engine as db_engine, init_db, load_sales, replace_sales, add_audit, load_alerts, save_alert,
-                delete_alert, get_data_mode, set_data_mode)
+                delete_alert, get_data_mode, set_data_mode, load_customers, replace_customers)
 from security import auth, need, ORG
-import analytics as an, assistant, orgs
+from orgs import guard_demo
+import analytics as an, assistant, ingest, orgs
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 STARTED = time.time()
 init_db(); orgs.seed()
 app = FastAPI(title="AETHER API", version=VERSION, description="Explainable AI business intelligence platform: "
@@ -42,8 +43,8 @@ def build():
 
 _C, _CTX = {}, {}   # per-organization caches: raw sales rows and computed analytics context
 
-def rows():
-    org = ORG.get()
+def rows(org=None):
+    org = org or ORG.get()
     if org not in _C:
         d = load_sales(org)
         if not d and get_data_mode(org) == "demo":
@@ -51,13 +52,13 @@ def rows():
         _C[org] = d
     return _C[org]
 
-def invalidate(org): _C.pop(org, None); _CTX.pop(org, None)
+def invalidate(org): _C.pop(org, None); _CTX.pop(org, None); _CHURN.pop(org, None)
 
 def context(user):
     """Everything the dashboards need, computed once per organization and cached until the data changes."""
     org = user["org"]
     if org in _CTX: return _CTX[org]
-    data = rows()
+    data = rows(org)
     if not data: return None
     m, by_r, by_p, cust = {}, {}, {}, {}
     for r in data:
@@ -78,13 +79,13 @@ def context(user):
     f, sd, in_mape = an.forecast(vals, 3, best); lo, hi = an.intervals(f, sd)
     anoms = an.anomalies(months, vals, region_series)
     mom = round((vals[-1] / vals[-2] - 1) * 100, 1) if len(vals) > 1 else 0
-    ttm = round((sum(vals[-12:]) / sum(vals[-24:-12]) - 1) * 100, 1) if len(vals) >= 24 else 0
+    ttm = round((sum(vals[-12:]) / sum(vals[-24:-12]) - 1) * 100, 1) if len(vals) >= 24 else None   # undefined without two full years
     kpis = {"revenue_total": sum(vals), "last_month": vals[-1], "mom_pct": mom, "customers": cust[months[-1]],
             "ytd_growth_pct": ttm, "arpu": round(vals[-1] / max(1, cust[months[-1]]), 2), "next_month": round(f[0])}
     fc = {"months": an.next_months(months[-1], 3), "values": [round(x) for x in f], "lower": lo, "upper": hi,
           "mape": scores.get(best, {}).get("mape") or round(in_mape, 2), "model": an.MODELS[best][0], "model_key": best}
     last12 = months[-12:]
-    ctx = {"org": user.get("org_name", "Your organization"), "rows": len(data), "months": months, "revenue": vals, "monthly": m,
+    ctx = {"org": user.get("org_name", "Your organization"), "rows": len(data), "data": data, "months": months, "revenue": vals, "monthly": m,
            "customers": [cust[k] for k in months], "regions": regions, "products": products,
            "by_region": by_r, "by_product": by_p, "region_series": region_series, "product_series": product_series,
            "forecast": fc, "kpis": kpis, "anomalies": anoms,
@@ -93,7 +94,11 @@ def context(user):
     _CTX[org] = ctx
     return ctx
 
-class Ask(BaseModel): question: str = Field(min_length=1, max_length=500)
+class Turn(BaseModel): role: str; content: str = Field(max_length=4000)
+class Ask(BaseModel): question: str = Field(min_length=1, max_length=500); history: list[Turn] = Field(default_factory=list, max_length=20)
+
+_ASKS = {}       # (org, user) -> recent question timestamps; protects the AI budget
+ASK_LIMIT = 40   # questions per user per hour
 
 EMPTY_FC = {"months": [], "values": [], "lower": [], "upper": [], "mape": None, "model": "Insufficient data"}
 
@@ -129,9 +134,17 @@ def forecast_lab(h: int = 6, user=Depends(auth)):
 def ask(b: Ask, user=Depends(auth)):
     ctx = context(user)
     if not ctx:
-        return {"answer": "No business data is available yet. Import a CSV file to start analyzing your company.", "sources": [],
-                "calculations": [], "chart": None, "followups": [], "engine": "aether-engine"}
-    return assistant.answer(b.question, ctx)
+        return {"answer": "No business data is available yet. Import a CSV or Excel file in the Data section to start analyzing your company.",
+                "sources": [], "calculations": [], "chart": None, "followups": [], "engine": "aether-engine"}
+    key, now = (user["org"], user["sub"]), time.time()
+    recent = [t for t in _ASKS.get(key, []) if now - t < 3600]
+    if len(recent) >= ASK_LIMIT: raise HTTPException(429, f"You've reached {ASK_LIMIT} questions this hour. Please try again later.")
+    _ASKS[key] = recent + [now]
+    clip = lambda v, lo, hi: max(lo, min(hi, float(v or 0)))
+    extras = {"whatif": lambda p, m, c, h: whatif(WI(price=clip(p, -50, 50), marketing=clip(m, -100, 200), churn=clip(c, -50, 50),
+                                                       horizon=int(clip(h, 1, 12))), user),
+              "churn": lambda: churn(user)}
+    return assistant.answer(b.question, ctx, [t.model_dump() for t in b.history], extras)
 
 @app.get("/api/assistant/info")
 def assistant_info(user=Depends(auth)):
@@ -155,36 +168,58 @@ def health():
 
 def log(u, a): add_audit(u["org"], u["sub"], a)
 
-MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])")
-SAMPLE = "month,region,product,revenue,customers\n" + "\n".join(
-    f"2025-{m:02d},{r},{p},{v},{v // 85}" for m in range(1, 7) for r, p, v in (("North", "Pro", 27000 + m * 400), ("South", "Basic", 7100 + m * 90)))
+TEMPLATES = {"sales": ingest.SALES_TEMPLATE, "customers": ingest.CUSTOMER_TEMPLATE}
+
+@app.get("/api/templates/{kind}", response_class=PlainTextResponse)
+def template(kind: str):
+    if kind not in TEMPLATES: raise HTTPException(404, "Unknown template")
+    return TEMPLATES[kind]
 
 @app.get("/api/sample-csv", response_class=PlainTextResponse)
-def sample_csv(): return SAMPLE
+def sample_csv(): return ingest.SALES_TEMPLATE
 
-class Up(BaseModel): content: str = Field(max_length=5_000_000)
+class Up(BaseModel):
+    content: str | None = Field(None, max_length=8_000_000); content_b64: str | None = Field(None, max_length=11_000_000)
+    filename: str = Field("", max_length=200); dry_run: bool = False
+
+def _read(b, fn):
+    try: return fn(b.content, b.content_b64, b.filename)
+    except ingest.IngestError as e: raise HTTPException(422, str(e))
 
 @app.post("/api/upload")
 def upload(b: Up, user=Depends(auth)):
+    """Import sales. With dry_run=true nothing is saved: the response shows how the file was understood."""
     need(user, "admin", "analyst")
-    rd = list(csv.DictReader(io.StringIO(b.content.lstrip("﻿")))); req = {"month", "region", "product", "revenue"}
-    if not rd or not req <= {c.strip().lower() for c in rd[0]}: raise HTTPException(422, "CSV needs columns: month, region, product, revenue")
-    rd = [{(k or "").strip().lower(): (v or "").strip() for k, v in r.items()} for r in rd]
-    seen, dup, miss, clean = set(), 0, 0, []
-    for r in rd:
-        k = tuple(r[c] for c in sorted(req))
-        if k in seen: dup += 1; continue
-        seen.add(k)
-        try:
-            rev = float(r["revenue"]); assert MONTH.match(r["month"]) and r["region"] and r["product"] and rev >= 0
-            cu = int(float(r["customers"])) if r.get("customers") else int(rev / 85)
-        except Exception: miss += 1; continue
-        clean.append({"month": r["month"][:7], "region": r["region"][:80], "product": r["product"][:80], "revenue": round(rev), "customers": cu})
-    if len({r["month"] for r in clean}) < 6: raise HTTPException(422, "Need at least 6 distinct months")
+    clean, rep = _read(b, ingest.ingest_sales)
+    if rep["months"] < 6: raise HTTPException(422, f"Need at least 6 distinct months of data (found {rep['months']}).")
+    if b.dry_run: return {**rep, "preview": clean[:8]}
+    guard_demo(user, "Importing data")
     replace_sales(user["org"], clean); set_data_mode(user["org"], "real"); invalidate(user["org"])
-    log(user, f"uploaded CSV ({len(rd)} rows)")
-    return {"rows": len(rd), "kept": len(clean), "duplicates": dup, "missing": miss,
-            "months": len({r["month"] for r in clean}), "score": max(0, round(100 - (dup + miss) / len(rd) * 100))}
+    log(user, f"imported sales file '{b.filename or 'CSV'}' ({rep['rows']} rows)")
+    return rep
+
+@app.post("/api/upload/customers")
+def upload_customers(b: Up, user=Depends(auth)):
+    """Import customer-level data so the churn model trains on this organization's own customers."""
+    need(user, "admin", "analyst")
+    rows, rep = _read(b, ingest.ingest_customers)
+    if not rows: raise HTTPException(422, "No valid customer rows found")
+    X = np.array([[r["tenure"], r["orders"], r["tickets"], r["idle"]] for r in rows])
+    y = np.array([np.nan if r["churned"] is None else r["churned"] for r in rows])
+    try: an.churn_model(X, y, [r["ext_id"] for r in rows])
+    except ValueError as e: raise HTTPException(422, str(e))
+    if b.dry_run: return {**rep, "preview": rows[:8]}
+    guard_demo(user, "Importing data")
+    replace_customers(user["org"], rows); _CHURN.pop(user["org"], None)
+    log(user, f"imported customer file '{b.filename or 'CSV'}' ({len(rows)} customers)")
+    return rep
+
+@app.get("/api/dataset")
+def dataset(user=Depends(auth)):
+    ctx = context(user)
+    return {"data_mode": get_data_mode(user["org"]), "demo_org": user["org"] == orgs.DEMO["org"], "customers": len(load_customers(user["org"])),
+            "sales": {"rows": ctx["rows"], "months": len(ctx["months"]), "range": [ctx["months"][0], ctx["months"][-1]],
+                      "regions": ctx["regions"], "products": ctx["products"]} if ctx else None}
 
 @app.post("/api/reset")
 def reset(user=Depends(auth)):
@@ -219,9 +254,23 @@ def whatif(b: WI, user=Depends(auth)):
             "delta": sum(sc) - round(tb), "delta_pct": round((f - 1) * 100, 2), "bridge": bridge,
             "assumptions": f"Price elasticity {b.elasticity}, marketing lift +0.25, churn impact −0.6 (adjustable assumptions)."}
 
-_CHURN = an.churn_model()
+_CHURN = {}   # per-organization trained churn model
 @app.get("/api/churn")
-def churn(user=Depends(auth)): return _CHURN
+def churn(user=Depends(auth)):
+    """Train on the organization's own customers; the demo dataset uses a synthetic customer base."""
+    org = user["org"]
+    if org not in _CHURN:
+        cust = load_customers(org)
+        if cust:
+            X = np.array([[c["tenure"], c["orders"], c["tickets"], c["idle"]] for c in cust])
+            y = np.array([np.nan if c["churned"] is None else c["churned"] for c in cust])
+            try: _CHURN[org] = {"available": True, "source": "your customers", **an.churn_model(X, y, [c["ext_id"] for c in cust], score_active_only=True)}
+            except ValueError as e: return {"available": False, "reason": str(e)}
+        elif get_data_mode(org) == "demo":
+            _CHURN[org] = {"available": True, "source": "demo customer base", **an.churn_model()}
+        else:
+            return {"available": False, "reason": "Import customer-level data (tenure, orders per month, support tickets, days since last order, churned) to train the churn model on your own customers."}
+    return _CHURN[org]
 
 class Al(BaseModel): name: str = Field(min_length=1, max_length=120); metric: str; op: str; threshold: float
 METRICS = ("mom_pct", "last_month", "customers", "ytd_growth_pct")

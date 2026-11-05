@@ -238,8 +238,26 @@ function buildShell() {
 
 function destroyCharts() { Object.values(S.charts).forEach((c) => c?.destroy()); S.charts = {}; }
 
+// Tokens last 8h; while the user is active we swap in a fresh one when less than 2h remain.
+async function renew() {
+  const p = decode(S.token); if (!p || p.exp * 1000 - Date.now() > 2 * 3600e3) return;
+  try {
+    const j = await api("auth/refresh", { method: "POST" });
+    S.token = j.token; Object.assign(S.sess, { token: j.token, role: j.role, org: j.org });
+    try { sessionStorage.setItem("aether.session", JSON.stringify(S.sess)); } catch {}
+  } catch {}
+}
+
+async function openAccount() {
+  const a = await api("account").catch(() => null); if (!a) return;
+  $("#acct-info").innerHTML = `<div class="li"><span>Username</span><b>${esc(a.username)}</b></div><div class="li"><span>Email</span><b>${esc(a.email)}</b></div>
+    <div class="li"><span>Role</span><span class="tag vi">${esc(a.role)}</span></div><div class="li"><span>Organization</span><b>${esc(a.org)}</b></div>`;
+  $("#acct-form").reset(); $("#acct-err").textContent = ""; $("#acct").hidden = false;
+}
+
 async function route() {
   if (!S.token) return;
+  renew();
   const id = (location.hash.match(/^#\/(\w+)/) || [])[1] || "overview";
   const n = NAV.find((x) => x.id === id) || NAV[1];
   $$("#side-nav a").forEach((a) => a.classList.toggle("on", a.dataset.id === n.id));
@@ -305,7 +323,7 @@ function countUp(el, to, f, ms = 1100) {
   (function step(now) { const k = Math.min(1, (now - t0) / ms); el.textContent = f(to * (1 - Math.pow(1 - k, 4))); if (k < 1) requestAnimationFrame(step); })(t0);
 }
 
-const deltaHtml = (v, suffix = "") => `<span class="delta ${v >= 0 ? "up" : "dn"}"><span class="delta-pill ${v >= 0 ? "up" : "dn"}">${v >= 0 ? "▲" : "▼"} ${fmt.pct(v).replace(/^[+−]/, "")}</span><span class="mu">${suffix}</span></span>`;
+const deltaHtml = (v, suffix = "") => v == null ? `<span class="delta"><span class="mu">needs 24 months of data</span></span>` : `<span class="delta ${v >= 0 ? "up" : "dn"}"><span class="delta-pill ${v >= 0 ? "up" : "dn"}">${v >= 0 ? "▲" : "▼"} ${fmt.pct(v).replace(/^[+−]/, "")}</span><span class="mu">${suffix}</span></span>`;
 
 // =========================================================================
 //  VIEW: OVERVIEW
@@ -413,9 +431,9 @@ function drawOverviewCharts() {
 function emptyData(v) {
   v.innerHTML = `<div class="vw"><div class="card empty" style="padding:80px 20px">
     <div class="eic">${icon("db")}</div><h3>Your workspace is ready</h3>
-    <p>${esc(S.sess.org)} has no data yet. Import a CSV with <span class="mono">month, region, product, revenue</span> — or load the demo dataset to explore every feature right away.</p>
+    <p>${esc(S.sess.org)} has no data yet. Import a CSV or Excel file with your monthly or daily sales (Spanish or English headers work) — or load the demo dataset to explore every feature right away.</p>
     <div class="row" style="justify-content:center;margin-top:8px">
-      ${can("write") ? `<a class="btn primary" href="#/data">${icon("upload")} Import CSV</a>` : ""}
+      ${can("write") ? `<a class="btn primary" href="#/data">${icon("upload")} Import data</a>` : ""}
       ${can("admin") ? `<button class="btn ghost" id="load-demo">${icon("refresh")} Load demo data</button>` : ""}
       ${!can("write") ? `<p class="mu">Ask an admin or analyst to import data.</p>` : ""}
     </div></div></div>`;
@@ -509,11 +527,13 @@ function msgChart(cv, c) {
 
 async function ask(q) {
   const log = $("#log"); if (!log) return askFromAnywhere(q);
+  // prior turns (plain text) so follow-ups like "and in October?" keep their context
+  const history = S.chat.filter((m) => !m.welcome && (m.text || m.answer)).slice(-10).map((m) => ({ role: m.role === "me" ? "user" : "assistant", content: (m.text || m.answer).slice(0, 2000) }));
   const me = { role: "me", text: q }; S.chat.push(me); log.append(renderMsg(me));
   const wait = document.createElement("div"); wait.className = "msg ai"; wait.innerHTML = `<div class="orb think"></div><div class="bub"><span class="typing"><i></i><i></i><i></i></span></div>`;
   log.append(wait); log.scrollTop = log.scrollHeight; $("#orb")?.classList.add("think");
   try {
-    const [r] = await Promise.all([api("ask", { method: "POST", body: { question: q } }), sleep(550)]);
+    const [r] = await Promise.all([api("ask", { method: "POST", body: { question: q, history } }), sleep(550)]);
     const m = { role: "ai", ...r }; S.chat.push(m); wait.replaceWith(renderMsg(m, true));
   } catch (e) { wait.querySelector(".bub").innerHTML = `<span class="dn">${esc(e.message)}</span>`; }
   $("#orb")?.classList.remove("think");
@@ -640,9 +660,17 @@ async function simulate() {
 // =========================================================================
 VIEWS.churn = async (v) => {
   const c = await api("churn"), cm = c.confusion;
+  if (!c.available) {
+    v.innerHTML = `<div class="card empty" style="padding:70px 20px"><div class="eic">${icon("users")}</div><h3>Train the churn model on your customers</h3><p>${esc(c.reason)}</p>
+      <div class="row" style="justify-content:center;margin-top:8px">${can("write") ? `<button class="btn primary" id="go-cust">${icon("upload")} Import customer data</button>` : ""}
+      <button class="btn ghost" id="cust-tpl">${icon("download")} Download template</button></div></div>`;
+    $("#go-cust", v)?.addEventListener("click", () => { DATA_KIND = "customers"; location.hash = "#/data"; });
+    $("#cust-tpl", v).onclick = async () => download("aether_customers_template.csv", await (await fetch("/api/templates/customers")).text());
+    return;
+  }
   const metrics = [["ROC AUC", c.auc.toFixed(3), "Ranking quality, 0.5 = random"], ["Accuracy", c.accuracy + "%", "Correct predictions"], ["Precision", c.precision + "%", "Flagged that truly churn"], ["Recall", c.recall + "%", "Churners we catch"], ["F1 score", c.f1 + "%", "Precision/recall balance"]];
   v.innerHTML = `<div class="vw">
-    <div class="notice">${icon("cpu")}<span>Logistic regression trained with gradient descent on ${c.train_size} customers and evaluated on a <b>${c.test_size}-customer holdout</b> never seen during training. Base churn rate ${c.base_rate}%.</span></div>
+    <div class="notice">${icon("cpu")}<span>Trained on <b>${esc(c.source)}</b>: logistic regression fitted by gradient descent on ${c.train_size} customers and evaluated on a <b>${c.test_size}-customer holdout</b> never seen during training. Base churn rate ${c.base_rate}%.${c.source === "your customers" ? ` Risk scores cover your ${fmt.num(c.scored)} active customers.` : ""}</span></div>
     <div class="metrics">${metrics.map((m) => `<div class="card metric"><small><span>${m[0]}</span></small><b>${m[1]}</b><small>${m[2]}</small></div>`).join("")}</div>
     <div class="g3">
       <div class="card"><div class="hd"><div><h3>ROC curve</h3><p>True vs false positive rate across thresholds</p></div></div><div class="chart-box xs" style="height:220px"><canvas id="c-roc"></canvas></div></div>
@@ -679,48 +707,102 @@ VIEWS.churn = async (v) => {
 // =========================================================================
 //  VIEW: DATA
 // =========================================================================
+const KINDS = {
+  sales: { title: "Sales data", api: "upload", needs: "a month/date column and a revenue/sales column", optional: "region, product, customers",
+    eg: "Fecha, Ciudad, Producto, Ventas · or · month, region, product, revenue" },
+  customers: { title: "Customer data", api: "upload/customers", needs: "tenure (months), orders per month, support tickets, days since last order", optional: "customer id, churned (yes/no)",
+    eg: "customer_id, tenure_months, orders_per_month, support_tickets, days_since_last_order, churned" },
+};
+let DATA_KIND = "sales";
+
 VIEWS.data = async (v) => {
-  const D = await overviewData();
-  const w = can("write");
-  v.innerHTML = `<div class="vw"><div class="g2">
-    <div class="card"><div class="hd"><div><h3>${icon("upload")} Import a CSV</h3><p>Required columns: <span class="mono">month (YYYY-MM), region, product, revenue</span> · optional <span class="mono">customers</span></p></div></div>
-      ${w ? `<label class="drop" id="dz"><div class="eic">${icon("upload")}</div><b>Drop your CSV here</b><span class="mu">or click to browse · up to 5 MB</span><input type="file" id="file" accept=".csv,text/csv" hidden /></label>`
+  const ds = await api("dataset"), w = can("write"), K = KINDS[DATA_KIND], sales = ds.sales;
+  v.innerHTML = `<div class="vw">
+    <div class="seg sm" id="kind" style="justify-self:start">${Object.entries(KINDS).map(([k, x]) => `<button data-k="${k}" class="${k === DATA_KIND ? "on" : ""}">${x.title}</button>`).join("")}</div>
+    <div class="g2">
+    <div class="card"><div class="hd"><div><h3>${icon("upload")} Import ${K.title.toLowerCase()}</h3><p>CSV or Excel (.xlsx), English or Spanish headers. Needs ${K.needs}; optional: ${K.optional}.</p></div></div>
+      ${ds.demo_org ? `<div class="notice" style="margin-bottom:14px">${icon("shield")}<span>This is the shared public demo, so imports are previewed but not saved. <a href="#" id="go-reg" style="color:var(--violet2);font-weight:600">Create your own workspace</a> to use your data.</span></div>` : ""}
+      ${w ? `<label class="drop" id="dz"><div class="eic">${icon("upload")}</div><b>Drop your file here</b><span class="mu">or click to browse · .csv, .xlsx · up to 8 MB</span><span class="mu mono" style="font-size:11.5px">${esc(K.eg)}</span><input type="file" id="file" accept=".csv,.txt,.xlsx,.xlsm,text/csv" hidden /></label>`
         : `<div class="notice">${icon("shield")}<span>Your role is <b>viewer</b>: you can explore and export data, but only admins and analysts can import. RBAC is enforced by the API.</span></div>`}
       <div id="up-res" style="margin-top:16px"></div>
-      <div class="hd" style="margin:22px 0 10px"><div><h3>Validation pipeline</h3></div></div>
-      <ol class="steps"><li>Header normalization (case, whitespace, BOM)</li><li>Schema check — rejects files without the required columns</li><li>Exact-duplicate removal and invalid-row filtering (month format, numeric revenue)</li><li>Minimum history check (6 distinct months), then quality score and atomic replace</li></ol>
+      <div class="hd" style="margin:22px 0 10px"><div><h3>What happens to your file</h3></div></div>
+      <ol class="steps"><li>Columns are recognized by name (e.g. <span class="mono">Fecha → month</span>, <span class="mono">Ventas → revenue</span>), and the delimiter is detected.</li>
+        <li>Dates (2025-03, 14/03/2025, mar-25…) and numbers ($1,234.50, 1.234,50…) are normalized.</li>
+        <li>Duplicates and invalid rows are removed; daily rows are summed into months.</li><li>You review a preview, then confirm. Nothing is saved before that.</li></ol>
     </div>
     <div style="display:grid;gap:18px;align-content:start">
-      <div class="card"><div class="hd"><div><h3>${icon("db")} Current dataset</h3></div><span class="tag ${D.data_mode === "real" ? "ok" : D.data_mode === "demo" ? "vi" : ""}">${D.data_mode === "real" ? "imported" : D.data_mode}</span></div>
-        <div class="list"><div class="li"><span>Rows</span><b class="mono">${fmt.num(D.quality.rows)}</b></div><div class="li"><span>Months</span><b class="mono">${D.months.length}${D.months.length ? ` <span class="mu">(${ml(D.months[0])} → ${ml(D.months.at(-1))})</span>` : ""}</b></div>
-          <div class="li"><span>Regions</span><b>${Object.keys(D.by_region).map(esc).join(", ") || "—"}</b></div><div class="li"><span>Products</span><b>${Object.keys(D.by_product).map(esc).join(", ") || "—"}</b></div></div></div>
+      <div class="card"><div class="hd"><div><h3>${icon("db")} Your data</h3></div><span class="tag ${ds.data_mode === "real" ? "ok" : ds.data_mode === "demo" ? "vi" : ""}">${ds.data_mode === "real" ? "imported" : ds.data_mode === "demo" ? "demo" : "empty"}</span></div>
+        <div class="list"><div class="li"><span>Sales rows</span><b class="mono">${sales ? fmt.num(sales.rows) : "—"}</b></div>
+          <div class="li"><span>Months</span><b class="mono">${sales ? `${sales.months} <span class="mu">(${ml(sales.range[0])} → ${ml(sales.range[1])})</span>` : "—"}</b></div>
+          <div class="li"><span>Regions</span><b>${sales ? sales.regions.slice(0, 6).map(esc).join(", ") + (sales.regions.length > 6 ? "…" : "") : "—"}</b></div>
+          <div class="li"><span>Products</span><b>${sales ? sales.products.slice(0, 6).map(esc).join(", ") + (sales.products.length > 6 ? "…" : "") : "—"}</b></div>
+          <div class="li"><span>Customers (churn model)</span><b class="mono">${ds.customers ? fmt.num(ds.customers) : ds.data_mode === "demo" ? "demo set" : "—"}</b></div></div></div>
       <div class="card"><div class="hd"><div><h3>Actions</h3></div></div><div style="display:grid;gap:8px">
-        <button class="btn ghost block" id="exp" ${D.months.length ? "" : "disabled"}>${icon("download")} Export dataset (CSV)</button>
-        <button class="btn ghost block" id="sample">${icon("download")} Download sample CSV</button>
-        ${can("admin") ? `<button class="btn ghost block" id="demo-btn">${icon("refresh")} Replace with demo dataset</button>` : ""}
+        <button class="btn ghost block" id="tpl">${icon("download")} Download ${K.title.toLowerCase()} template</button>
+        <button class="btn ghost block" id="exp" ${sales ? "" : "disabled"}>${icon("download")} Export sales (CSV)</button>
+        ${can("admin") && !ds.demo_org ? `<button class="btn ghost block" id="demo-btn">${icon("refresh")} Replace with demo dataset</button>` : ""}
       </div></div>
     </div></div></div>`;
-  $("#exp", v).onclick = async () => { const r = await api("export"); download("aether_export.csv", r.content); toast("Dataset exported"); };
-  $("#sample", v).onclick = async () => { const r = await fetch("/api/sample-csv"); download("aether_sample.csv", await r.text()); };
-  $("#demo-btn", v)?.addEventListener("click", () => confirm("Replace this organization's data with the demo dataset?") && loadDemo());
+  $$("#kind button", v).forEach((b) => (b.onclick = () => { DATA_KIND = b.dataset.k; route(); }));
+  $("#go-reg", v)?.addEventListener("click", (e) => { e.preventDefault(); logout(); openAuth("reg"); });
+  $("#exp", v).onclick = async () => { const r = await api("export"); download("aether_sales.csv", r.content); toast("Sales exported"); };
+  $("#tpl", v).onclick = async () => { const r = await fetch("/api/templates/" + DATA_KIND); download(`aether_${DATA_KIND}_template.csv`, await r.text()); };
+  $("#demo-btn", v)?.addEventListener("click", () => confirm("Replace this organization's sales with the demo dataset?") && loadDemo());
   if (!w) return;
   const dz = $("#dz", v);
-  $("#file", v).onchange = (e) => e.target.files[0] && upload(e.target.files[0]);
+  $("#file", v).onchange = (e) => e.target.files[0] && preview(e.target.files[0], ds.demo_org);
   dz.ondragover = (e) => { e.preventDefault(); dz.classList.add("h"); }; dz.ondragleave = () => dz.classList.remove("h");
-  dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove("h"); e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]); };
+  dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove("h"); e.dataTransfer.files[0] && preview(e.dataTransfer.files[0], ds.demo_org); };
 };
 
-async function upload(file) {
-  const out = $("#up-res");
-  if (file.size > 5e6) return toast("File is larger than 5 MB", "err");
-  out.innerHTML = `<div class="skel" style="height:90px"></div>`;
-  try {
-    const r = await api("upload", { method: "POST", body: { content: await file.text() } });
-    out.innerHTML = `<div class="card" style="padding:16px"><div class="row" style="gap:18px;flex-wrap:nowrap"><div class="ring-wrap"><div class="ring" style="--p:${r.score};--c:${r.score > 90 ? "var(--green)" : "var(--amber)"}"></div><b>${r.score}</b></div>
-      <div class="list" style="flex:1"><div class="li"><span>${esc(file.name)}</span><span class="tag ok">imported</span></div><div class="li"><span>Rows kept</span><b class="mono">${r.kept} / ${r.rows}</b></div>
-      <div class="li"><span>Duplicates removed · invalid</span><b class="mono">${r.duplicates} · ${r.missing}</b></div><div class="li"><span>Distinct months</span><b class="mono">${r.months}</b></div></div></div></div>`;
-    S.D = null; S.lab = null; toast("Data imported — every dashboard has been recomputed"); refreshBell();
-  } catch (e) { out.innerHTML = `<div class="notice" style="border-color:rgba(251,113,133,.35);background:rgba(251,113,133,.06)">${icon("alert")}<span>${esc(e.message)}</span></div>`; }
+async function filePayload(file) {
+  if (/\.xlsx?m?$/i.test(file.name)) {
+    const bytes = new Uint8Array(await file.arrayBuffer()); let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { content_b64: btoa(bin), filename: file.name };
+  }
+  return { content: await file.text(), filename: file.name };
+}
+
+const errBox = (msg) => `<div class="notice" style="border-color:rgba(251,113,133,.35);background:rgba(251,113,133,.06)">${icon("alert")}<span>${esc(msg)}</span></div>`;
+
+async function preview(file, demoOrg) {
+  const out = $("#up-res"), kind = DATA_KIND, K = KINDS[kind];
+  if (file.size > 8e6) return toast("File is larger than 8 MB", "err");
+  out.innerHTML = `<div class="skel" style="height:120px"></div>`;
+  let body;
+  try { body = await filePayload(file); const r = await api(K.api, { method: "POST", body: { ...body, dry_run: true } }); out.innerHTML = previewHtml(file, r, kind, demoOrg); }
+  catch (e) { out.innerHTML = errBox(e.message); return; }
+  paintIcons(out);
+  $("#up-cancel", out).onclick = () => { out.innerHTML = ""; $("#file").value = ""; };
+  $("#up-go", out)?.addEventListener("click", async () => {
+    const btn = $("#up-go", out); btn.disabled = true; btn.textContent = "Importing…";
+    try {
+      await api(K.api, { method: "POST", body });
+      S.D = null; S.lab = null; toast(kind === "sales" ? "Sales imported — every dashboard has been recomputed" : "Customers imported — the churn model was retrained on them");
+      refreshBell(); location.hash = kind === "sales" ? "#/overview" : "#/churn";
+    } catch (e) { out.insertAdjacentHTML("beforeend", errBox(e.message)); btn.disabled = false; btn.textContent = "Import"; }
+  });
+}
+
+function previewHtml(file, r, kind, demoOrg) {
+  const cols = Object.entries(r.columns).map(([f, c]) => `<span class="tag vi">${esc(c)} → ${f}</span>`).join(" ");
+  const stats = kind === "sales"
+    ? [["Rows read", fmt.num(r.rows)], ["Kept", fmt.num(r.kept)], ["Duplicates · invalid", `${r.duplicates} · ${r.invalid}`], ["Months", `${r.months} (${ml(r.range[0])} → ${ml(r.range[1])})`],
+       ["Regions", r.regions.length], ["Products", r.products.length]]
+    : [["Customers", fmt.num(r.kept)], ["Invalid rows", r.invalid], ["With known outcome", fmt.num(r.labeled)], ["Churn rate", r.churn_rate != null ? r.churn_rate + "%" : "—"]];
+  const head = kind === "sales" ? ["month", "region", "product", "revenue", "customers"] : ["ext_id", "tenure", "orders", "tickets", "idle", "churned"];
+  const notes = [r.estimated_customers ? "No customers column: customer counts are estimated from revenue." : "",
+    r.invalid_samples?.length ? `Skipped rows look like: ${r.invalid_samples.map((s) => s.join(" | ")).slice(0, 2).join(" ; ")}` : "",
+    kind === "customers" && !r.labeled ? "No churned column: the model can't be trained without known outcomes." : ""].filter(Boolean);
+  return `<div class="card" style="padding:18px"><div class="hd" style="margin-bottom:10px"><div><h3>${icon("check")} Preview · ${esc(file.name)}</h3><p>${esc(r.format)}${r.delimiter ? ` · delimiter “${esc(r.delimiter)}”` : ""}${r.date_order ? ` · dates ${r.date_order === "dmy" ? "day/month" : "month/day"}` : ""} · quality ${r.score}/100</p></div></div>
+    <div class="row" style="margin-bottom:12px">${cols}</div>
+    <div class="list">${stats.map(([a, b]) => `<div class="li"><span>${a}</span><b class="mono">${esc(String(b))}</b></div>`).join("")}</div>
+    ${notes.map((n) => `<p class="mu" style="font-size:12.5px;margin:10px 0 0">${esc(n)}</p>`).join("")}
+    <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>
+      ${r.preview.map((row) => `<tr>${head.map((h) => `<td class="${typeof row[h] === "number" ? "num" : ""}">${esc(row[h] ?? "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost sm" id="up-cancel">Cancel</button>
+      ${demoOrg ? `<span class="mu" style="font-size:12.5px">Saving is disabled in the public demo</span>` : `<button class="btn primary sm" id="up-go">Import ${r.kept ?? r.rows} rows</button>`}</div></div>`;
 }
 
 function download(name, text) {
@@ -808,7 +890,7 @@ VIEWS.report = async (v) => {
         <div class="rp-meta">Generated ${esc(r.generated)}<br>Prepared for ${esc(r.author)}<br>Period ${ml(r.months[0])} – ${ml(r.months.at(-1))}</div></header>
       <section class="rp-sec"><h4>Summary</h4><p>${md(r.summary)}</p></section>
       <section class="rp-sec"><h4>Key metrics</h4><div class="rp-kpis">
-        <div><small>Revenue, last 12 months</small><b>${fmt.k(sum(r.revenue))}</b><span class="${k.ytd_growth_pct >= 0 ? "up" : "dn"} mono">${fmt.pct(k.ytd_growth_pct)} YoY</span></div>
+        <div><small>Revenue, last 12 months</small><b>${fmt.k(sum(r.revenue))}</b>${k.ytd_growth_pct == null ? `<span class="mu mono">${r.months.length} months</span>` : `<span class="${k.ytd_growth_pct >= 0 ? "up" : "dn"} mono">${fmt.pct(k.ytd_growth_pct)} YoY</span>`}</div>
         <div><small>Last month</small><b>${fmt.k(k.last_month)}</b><span class="${k.mom_pct >= 0 ? "up" : "dn"} mono">${fmt.pct(k.mom_pct)} MoM</span></div>
         <div><small>Active customers</small><b>${fmt.num(k.customers)}</b><span class="mu mono">ARPU $${k.arpu}</span></div>
         <div><small>Next quarter forecast</small><b>${fmt.k(sum(r.forecast.values))}</b><span class="mu mono">MAPE ${r.forecast.mape}%</span></div></div></section>
@@ -854,6 +936,7 @@ function commands(q) {
     { grp: "Actions", label: "Export dataset as CSV", icon: "download", run: async () => { const r = await api("export"); download("aether_export.csv", r.content); } },
     { grp: "Actions", label: "Print executive report", icon: "print", run: () => { location.hash = "#/report"; setTimeout(print, 900); } },
     ...(can("admin") ? [{ grp: "Actions", label: "Load demo dataset", icon: "refresh", run: loadDemo }] : []),
+    { grp: "Actions", label: "Account & password", icon: "shield", run: openAccount },
     { grp: "Actions", label: "Open API documentation", icon: "cpu", run: () => open("/docs", "_blank") },
     { grp: "Actions", label: "Sign out", icon: "logout", run: logout },
   ];
@@ -890,6 +973,13 @@ function boot() {
   $$("[data-close]").forEach((b) => (b.onclick = () => closeModal("#auth")));
   $$(".modal").forEach((m) => m.addEventListener("mousedown", (e) => { if (e.target === m) m.hidden = true; }));
   $("#theme-btn").onclick = toggleTheme; $("#logout-btn").onclick = () => { logout(); toast("Signed out", "info"); };
+  $(".me").onclick = openAccount; $(".me").style.cursor = "pointer"; $(".me").title = "Account settings";
+  $("[data-close-acct]").onclick = () => closeModal("#acct");
+  $("#acct-form").onsubmit = async (e) => {
+    e.preventDefault(); $("#acct-err").textContent = "";
+    try { await api("account/password", { method: "POST", body: { current: $("#pw-cur").value, new: $("#pw-new").value } }); closeModal("#acct"); toast("Password updated"); }
+    catch (err) { $("#acct-err").textContent = err.message; }
+  };
   $("#menu-btn").onclick = () => $("#app").classList.add("side-open");
   $$("[data-close-side]").forEach((b) => (b.onclick = () => $("#app").classList.remove("side-open")));
   $("#cmd-btn").onclick = openCmd;

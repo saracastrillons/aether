@@ -60,7 +60,7 @@ def test_register_and_upload_csv(client):
     assert client.get("/api/overview", headers=h).json()["months"] == []        # new orgs start empty (tenant isolation)
     csv = client.get("/api/sample-csv").text
     up = client.post("/api/upload", headers=h, json={"content": csv}).json()
-    assert up["kept"] == 12 and up["score"] == 100
+    assert up["kept"] == 48 and up["score"] == 100
     assert client.post("/api/ask", headers=h, json={"question": "what happened in March?"}).status_code == 200
 
 
@@ -78,3 +78,12 @@ def test_backtest_prefers_structure_over_naive():
 def test_churn_metrics():
     c = an.churn_model()
     assert 0.5 < c["auc"] <= 1 and sum(c["confusion"].values()) == c["test_size"]
+
+
+def test_repeating_seasonal_peak_is_not_an_anomaly():
+    months = [f"{2023 + i // 12}-{i % 12 + 1:02d}" for i in range(36)]
+    vals = [100 + i + (40 if i % 12 == 11 else 0) for i in range(36)]      # every December +40
+    flagged = {a["month"] for a in an.anomalies(months, vals)}
+    assert "2024-12" not in flagged and "2025-12" not in flagged
+    vals[20] *= 0.5                                                          # a one-off crash in 2024-09
+    assert "2024-09" in {a["month"] for a in an.anomalies(months, vals)}

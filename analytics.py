@@ -98,6 +98,8 @@ def anomalies(months, vals, by_region=None, threshold=3.5):
     for i, gi in enumerate(g):
         z = 0.6745 * (gi - med) / mad
         if abs(z) <= threshold: continue
+        # a jump that repeats in the same calendar month last year is seasonality, not an anomaly
+        if i >= 12 and np.sign(g[i - 12]) == np.sign(gi) and abs(gi - g[i - 12]) < 0.5 * abs(gi): continue
         cur, prev = months[i + 1], months[i]; driver = None
         if by_region:
             deltas = {r: s[i + 1] - s[i] for r, s in by_region.items()}
@@ -114,19 +116,35 @@ def _auc(y, p):
     pos = y == 1; n1, n0 = pos.sum(), (~pos).sum()
     return float((ranks[pos].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)) if n1 and n0 else 0.5
 
-def churn_model(n=600, seed=3):
-    """Logistic regression trained by batch gradient descent on a synthetic customer base, evaluated on a 30% holdout."""
+FEATURES = ["tenure", "orders/month", "support tickets", "days since last order"]
+ACTIONS = {"tenure": "Onboarding call + loyalty perk", "orders/month": "Re-engagement offer on favourite category",
+           "support tickets": "Escalate to senior support, close open tickets", "days since last order": "Win-back email with time-limited discount"}
+
+def synthetic_customers(n=600, seed=3):
+    """Demo customer base whose churn follows a known logistic process."""
     rg = np.random.default_rng(seed)
     X = np.c_[rg.integers(1, 48, n), rg.poisson(4, n), rg.integers(0, 6, n), rg.integers(0, 90, n)].astype(float)
-    names = ["tenure", "orders/month", "support tickets", "days since last order"]
-    true = np.array([-.9, -.8, .9, 1.1])
-    mu, sd = X.mean(0), X.std(0); Z = (X - mu) / sd
-    y = (rg.random(n) < 1 / (1 + np.exp(-(Z @ true - .6)))).astype(float)
-    idx = rg.permutation(n); cut = int(n * .7); tr, te = idx[:cut], idx[cut:]
+    Z = (X - X.mean(0)) / X.std(0)
+    y = (rg.random(n) < 1 / (1 + np.exp(-(Z @ np.array([-.9, -.8, .9, 1.1]) - .6)))).astype(float)
+    return X, y, [f"CUST-{1000 + i}" for i in range(n)]
+
+def churn_model(X=None, y=None, ids=None, seed=3, score_active_only=False):
+    """Logistic regression trained by batch gradient descent and evaluated on a 30% stratified holdout.
+
+    X: (n, 4) features, y: 0/1 labels with NaN for customers whose outcome is unknown (they are only scored)."""
+    if X is None: X, y, ids = synthetic_customers(seed=seed)
+    X, y = np.asarray(X, float), np.asarray(y, float); rg = np.random.default_rng(seed)
+    lab = np.where(~np.isnan(y))[0]
+    pos, neg = lab[y[lab] == 1], lab[y[lab] == 0]
+    if len(lab) < 40 or len(pos) < 5 or len(neg) < 5:
+        raise ValueError("Need at least 40 customers with a known outcome, including 5 churned and 5 retained, to train the model")
+    mu, sd = X[lab].mean(0), X[lab].std(0); sd[sd == 0] = 1; Z = (X - mu) / sd
+    te = np.r_[rg.permutation(pos)[: max(1, int(len(pos) * .3))], rg.permutation(neg)[: max(1, int(len(neg) * .3))]]
+    tr = np.setdiff1d(lab, te)
     w, c, curve = np.zeros(4), 0.0, []
     for epoch in range(600):
         p = 1 / (1 + np.exp(-(Z[tr] @ w + c)))
-        w -= .1 * Z[tr].T @ (p - y[tr]) / len(tr); c -= .1 * (p - y[tr]).mean()
+        w -= .1 * (Z[tr].T @ (p - y[tr]) / len(tr) + 1e-3 * w); c -= .1 * (p - y[tr]).mean()   # light L2 for stability
         if epoch % 30 == 0:
             curve.append(round(float(-np.mean(y[tr] * np.log(p + 1e-9) + (1 - y[tr]) * np.log(1 - p + 1e-9))), 4))
     prob = 1 / (1 + np.exp(-(Z @ w + c))); pt, yt = prob[te], y[te]; pred = pt > .5
@@ -138,22 +156,20 @@ def churn_model(n=600, seed=3):
         pr = pt >= th
         roc.append([round(float((pr & (yt == 0)).sum() / max(1, (yt == 0).sum())), 3),
                     round(float((pr & (yt == 1)).sum() / max(1, (yt == 1).sum())), 3)])
-    actions = {"tenure": "Onboarding call + loyalty perk", "orders/month": "Re-engagement offer on favourite category",
-               "support tickets": "Escalate to senior support, close open tickets", "days since last order": "Win-back email with time-limited discount"}
-    top = np.argsort(-prob)[:12]; at_risk = []
+    # who to act on: everyone (demo) or only customers not already lost (real data)
+    cand = np.where(~(y == 1))[0] if score_active_only else np.arange(len(X))
+    top = cand[np.argsort(-prob[cand])][:12]; at_risk = []
     for i in top:
-        contrib = w * Z[i]; reason = names[int(np.argmax(contrib))]
-        at_risk.append({"id": f"CUST-{1000 + int(i)}", "prob": round(float(prob[i]) * 100, 1), "tenure": int(X[i, 0]),
-                        "orders": int(X[i, 1]), "tickets": int(X[i, 2]), "idle_days": int(X[i, 3]),
-                        "reason": reason, "action": actions[reason],
-                        "contrib": [round(float(v), 2) for v in contrib]})
-    base = float(y.mean())
+        contrib = w * Z[i]; reason = FEATURES[int(np.argmax(contrib))]
+        at_risk.append({"id": str(ids[i]), "prob": round(float(prob[i]) * 100, 1), "tenure": round(float(X[i, 0]), 1),
+                        "orders": round(float(X[i, 1]), 1), "tickets": int(X[i, 2]), "idle_days": int(X[i, 3]),
+                        "reason": reason, "action": ACTIONS[reason], "contrib": [round(float(v), 2) for v in contrib]})
     return {"accuracy": round(float((pred == yt).mean() * 100), 1), "precision": round(prec * 100, 1), "recall": round(rec * 100, 1),
             "f1": round(2 * prec * rec / (prec + rec) * 100, 1) if prec + rec else 0, "auc": round(_auc(yt, pt), 3),
             "confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn}, "roc": roc, "loss_curve": curve,
-            "train_size": len(tr), "test_size": len(te), "base_rate": round(base * 100, 1),
-            "features": names, "weights": [round(float(x), 2) for x in w], "bias": round(float(c), 2),
-            "at_risk": at_risk, "segments": _segments(prob)}
+            "train_size": len(tr), "test_size": len(te), "scored": len(cand), "total": len(X), "base_rate": round(float(y[lab].mean()) * 100, 1),
+            "features": FEATURES, "weights": [round(float(x), 2) for x in w], "bias": round(float(c), 2),
+            "at_risk": at_risk, "segments": _segments(prob[cand])}
 
 def _segments(prob):
     b = [(0, 30, "Low"), (30, 60, "Medium"), (60, 80, "High"), (80, 101, "Critical")]
