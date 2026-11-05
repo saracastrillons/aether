@@ -47,11 +47,14 @@ def test_rbac_viewer_cannot_upload(client, viewer):
     assert client.post("/api/upload", headers=viewer, json={"content": "month,region,product,revenue\n"}).status_code == 403
 
 
-def test_alert_lifecycle(client, admin):
-    assert client.post("/api/alerts", headers=admin, json={"name": "Drop", "metric": "mom_pct", "op": "<", "threshold": -5}).status_code == 200
-    a = client.get("/api/alerts", headers=admin).json()[-1]
+def test_alert_lifecycle(client):
+    r = client.post("/api/auth/register", json={"org_name": "Alerts Co", "username": "alerts_admin", "email": "a@alerts.io", "password": "supersecret"})
+    h = {"Authorization": "Bearer " + r.json()["token"]}
+    client.post("/api/reset", headers=h)                                      # load demo data into this org
+    assert client.post("/api/alerts", headers=h, json={"name": "Drop", "metric": "mom_pct", "op": "<", "threshold": -5}).status_code == 200
+    a = client.get("/api/alerts", headers=h).json()[-1]
     assert a["name"] == "Drop" and a["value"] is not None
-    assert client.delete(f"/api/alerts/{a['id']}", headers=admin).status_code == 200
+    assert client.delete(f"/api/alerts/{a['id']}", headers=h).status_code == 200
 
 
 def test_register_and_upload_csv(client):

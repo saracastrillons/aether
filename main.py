@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from db import (engine as db_engine, init_db, load_sales, replace_sales, add_audit, load_alerts, save_alert,
                 delete_alert, get_data_mode, set_data_mode, load_customers, replace_customers)
-from security import auth, need, ORG
+from security import auth, need, ORG, RateLimiter
 from orgs import guard_demo
 import analytics as an, assistant, ingest, orgs
 
@@ -97,8 +97,8 @@ def context(user):
 class Turn(BaseModel): role: str; content: str = Field(max_length=4000)
 class Ask(BaseModel): question: str = Field(min_length=1, max_length=500); history: list[Turn] = Field(default_factory=list, max_length=20)
 
-_ASKS = {}       # (org, user) -> recent question timestamps; protects the AI budget
-ASK_LIMIT = 40   # questions per user per hour
+ASK_LIMIT = 40   # questions per user per hour; protects the AI budget
+ASKS = RateLimiter(ASK_LIMIT, 3600)
 
 EMPTY_FC = {"months": [], "values": [], "lower": [], "upper": [], "mape": None, "model": "Insufficient data"}
 
@@ -136,10 +136,7 @@ def ask(b: Ask, user=Depends(auth)):
     if not ctx:
         return {"answer": "No business data is available yet. Import a CSV or Excel file in the Data section to start analyzing your company.",
                 "sources": [], "calculations": [], "chart": None, "followups": [], "engine": "aether-engine"}
-    key, now = (user["org"], user["sub"]), time.time()
-    recent = [t for t in _ASKS.get(key, []) if now - t < 3600]
-    if len(recent) >= ASK_LIMIT: raise HTTPException(429, f"You've reached {ASK_LIMIT} questions this hour. Please try again later.")
-    _ASKS[key] = recent + [now]
+    ASKS.check((user["org"], user["sub"]), f"You've reached {ASK_LIMIT} questions this hour. Please try again later.")
     clip = lambda v, lo, hi: max(lo, min(hi, float(v or 0)))
     extras = {"whatif": lambda p, m, c, h: whatif(WI(price=clip(p, -50, 50), marketing=clip(m, -100, 200), churn=clip(c, -50, 50),
                                                        horizon=int(clip(h, 1, 12))), user),
@@ -285,7 +282,7 @@ def alerts(user=Depends(auth)):
 
 @app.post("/api/alerts")
 def add_alert(b: Al, user=Depends(auth)):
-    need(user, "admin", "analyst")
+    need(user, "admin", "analyst"); guard_demo(user, "Creating alerts")
     if b.metric not in METRICS: raise HTTPException(422, "Invalid metric")
     if b.op not in ("<", ">"): raise HTTPException(422, "Invalid operator")
     save_alert(user["org"], b.name, b.metric, b.op, b.threshold); log(user, f"created alert '{b.name}'")
@@ -293,7 +290,7 @@ def add_alert(b: Al, user=Depends(auth)):
 
 @app.delete("/api/alerts/{aid}")
 def remove_alert(aid: int, user=Depends(auth)):
-    need(user, "admin", "analyst")
+    need(user, "admin", "analyst"); guard_demo(user, "Deleting alerts")
     if not delete_alert(user["org"], aid): raise HTTPException(404, "Alert not found")
     log(user, "deleted an alert")
     return {"ok": True}

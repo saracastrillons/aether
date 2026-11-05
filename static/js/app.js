@@ -853,8 +853,8 @@ const METRIC = { mom_pct: ["Revenue MoM", "%"], last_month: ["Monthly revenue", 
 const fmtMetric = (m, x) => (x == null ? "no data" : METRIC[m][1] === "%" ? fmt.pct(x) : METRIC[m][1] === "$" ? fmt.usd(x) : fmt.num(x));
 const TEMPLATES = [["Revenue drop", "mom_pct", "<", -10], ["Growth slowdown", "ytd_growth_pct", "<", 10], ["Customer floor", "customers", "<", 3000], ["Record month", "last_month", ">", 300000]];
 VIEWS.alerts = async (v) => {
-  const list = await api("alerts"); S.alerts = list;
-  const w = can("write"), firing = list.filter((a) => a.firing).length;
+  const [list, ds] = await Promise.all([api("alerts"), api("dataset")]); S.alerts = list;
+  const w = can("write") && !ds.demo_org, firing = list.filter((a) => a.firing).length;
   v.innerHTML = `<div class="vw">
     <div class="metrics" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="card metric"><small><span>Active rules</span><span class="ki">${icon("bell")}</span></small><b>${list.length}</b><small>KPI thresholds</small></div>
       <div class="card metric"><small><span>Firing now</span><span class="ki">${icon("alert")}</span></small><b class="${firing ? "dn" : "up"}">${firing}</b><small>${firing ? "Needs attention" : "All clear"}</small></div>
@@ -870,8 +870,9 @@ VIEWS.alerts = async (v) => {
         <select id="al-metric">${Object.entries(METRIC).map(([k, m]) => `<option value="${k}">${m[0]}</option>`).join("")}</select>
         <select id="al-op"><option>&lt;</option><option>&gt;</option></select><input id="al-th" type="number" step="any" placeholder="Threshold" required />
         <button class="btn primary" type="submit">Create</button></form></div>`
-      : `<div class="notice">${icon("shield")}<span>Viewers can see alerts but not change them.</span></div>`}
+      : `<div class="notice">${icon("shield")}<span>${ds.demo_org ? "These are example rules in the shared public demo, so they’re read-only. <a href=\"#\" id=\"al-reg\" style=\"color:var(--violet2);font-weight:600\">Create your own workspace</a> to define your own alerts." : "Viewers can see alerts but not change them."}</span></div>`}
   </div>`;
+  $("#al-reg", v)?.addEventListener("click", (e) => { e.preventDefault(); logout(); openAuth("reg"); });
   $$("[data-del]", v).forEach((b) => (b.onclick = async () => { await api("alerts/" + b.dataset.del, { method: "DELETE" }).then(() => toast("Alert deleted")).catch((e) => toast(e.message, "err")); route(); refreshBell(); }));
   $$("[data-t]", v).forEach((b) => (b.onclick = () => { const t = TEMPLATES[+b.dataset.t]; $("#al-name").value = t[0]; $("#al-metric").value = t[1]; $("#al-op").value = t[2]; $("#al-th").value = t[3]; }));
   $("#al-form", v)?.addEventListener("submit", async (e) => {

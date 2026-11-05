@@ -1,11 +1,11 @@
 """Organizations, users, roles and invitations."""
-import re, secrets, time
+import re, secrets
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func
-from db import Session, Org, User, Invite, add_audit, list_audit
-from security import auth, need, hash_pw, check_pw, make_token
+from db import Session, Org, User, Invite, Alert, add_audit, list_audit
+from security import auth, need, hash_pw, check_pw, make_token, RateLimiter, client_ip
 
 router = APIRouter(prefix="/api")
 ROLES = ("admin", "analyst", "viewer")
@@ -20,6 +20,8 @@ class Role(BaseModel): role: str
 class Pw(BaseModel): current: str; new: str
 
 DEMO = {"org": None}   # id of the shared public demo organization
+DEMO_ALERTS = [("Revenue drop over 10%", "mom_pct", "<", -10), ("Customer base below 3,000", "customers", "<", 3000),
+               ("Record month above $290K", "last_month", ">", 290000)]
 
 def seed():
     """Create the demo organization (demo/demo, analyst/analyst, viewer/viewer) on first run."""
@@ -31,6 +33,10 @@ def seed():
             s.flush()
         u = s.scalar(select(User).where(User.username == "demo"))
         DEMO["org"] = u.org_id if u else None
+        if u:   # example alert rules, so visitors see the feature without being able to edit the shared demo
+            have = set(s.scalars(select(Alert.name).where(Alert.org_id == u.org_id)))
+            for name, metric, op, th in DEMO_ALERTS:
+                if name not in have: s.add(Alert(org_id=u.org_id, name=name, metric=metric, op=op, threshold=th))
 
 def guard_demo(user, what="This action"):
     """The public demo is shared by every visitor, so anything that would break it for others is blocked."""
@@ -45,8 +51,15 @@ def _validate(username, email, password):
     if not EMAIL.match(email): raise HTTPException(422, "Invalid email")
     if len(password) < 8: raise HTTPException(422, "Password must have at least 8 characters")
 
+# Throttles are keyed by IP, so one visitor can never lock other people out (e.g. of the shared demo).
+LOGIN_FAILS = RateLimiter(5, 300)        # wrong passwords per (IP, username) in 5 minutes
+IP_FAILS = RateLimiter(30, 900)          # wrong passwords per IP across all usernames (password spraying)
+SIGNUPS = RateLimiter(10, 3600)          # new accounts (registrations + accepted invites) per IP per hour
+SLOW_DOWN = "Too many failed attempts. Try again in a few minutes."
+
 @router.post("/auth/register")
-def register(b: Reg):
+def register(b: Reg, request: Request):
+    SIGNUPS.check(client_ip(request), "Too many accounts created from this network. Try again later.")
     name = b.username.strip().lower(); _validate(name, b.email, b.password)
     if len(b.org_name.strip()) < 2: raise HTTPException(422, "Organization name is required")
     with Session.begin() as s:
@@ -62,19 +75,16 @@ def register(b: Reg):
     add_audit(oid, name, "created the organization")
     return out
 
-_FAILS = {}   # username -> recent failed login timestamps (simple brute-force throttle)
-
 @router.post("/auth/login")
-def login(b: Login):
-    name, now = b.username.strip().lower(), time.time()
-    recent = [t for t in _FAILS.get(name, []) if now - t < 300]
-    if len(recent) >= 5: raise HTTPException(429, "Too many failed attempts. Try again in a few minutes.")
+def login(b: Login, request: Request):
+    name, ip = b.username.strip().lower(), client_ip(request)
+    if LOGIN_FAILS.blocked((ip, name)) or IP_FAILS.blocked(ip): raise HTTPException(429, SLOW_DOWN)
     with Session() as s:
         u = s.scalar(select(User).where(User.username == name))
         if not u or not check_pw(b.password, u.pw):
-            _FAILS[name] = recent + [now]
+            LOGIN_FAILS.hit((ip, name)); IP_FAILS.hit(ip)
             raise HTTPException(401, "Invalid credentials")
-        _FAILS.pop(name, None)
+        LOGIN_FAILS.reset((ip, name))
         out = _session(u, s.get(Org, u.org_id)); oid = u.org_id
     add_audit(oid, b.username, "login")
     return out
@@ -119,7 +129,8 @@ def invite_info(token: str):
         return {"org": s.get(Org, i.org_id).name, "role": i.role, "email": i.email}
 
 @router.post("/invites/accept")
-def accept(b: Acc):
+def accept(b: Acc, request: Request):
+    SIGNUPS.check(client_ip(request), "Too many accounts created from this network. Try again later.")
     name = b.username.strip().lower()
     with Session.begin() as s:
         i = _open_invite(s, b.token); _validate(name, i.email, b.password)

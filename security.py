@@ -12,6 +12,35 @@ if not SECRET_VALUE or len(SECRET_VALUE) < 48:
 SECRET = SECRET_VALUE.encode()
 
 TOKEN_TTL = 8 * 3600   # seconds; the client renews the token while the user is active
+
+class RateLimiter:
+    """Sliding-window counter per key (in memory: fine for a single server process)."""
+    def __init__(self, limit, window):
+        self.limit, self.window, self.hits = limit, window, {}
+
+    def _recent(self, key, now):
+        return [t for t in self.hits.get(key, []) if now - t < self.window]
+
+    def blocked(self, key):
+        return len(self._recent(key, time.time())) >= self.limit
+
+    def hit(self, key):
+        now = time.time()
+        if len(self.hits) > 50_000:   # drop stale keys so memory stays bounded
+            self.hits = {k: v for k, v in self.hits.items() if v and now - v[-1] < self.window}
+        self.hits[key] = self._recent(key, now) + [now]
+
+    def reset(self, key):
+        self.hits.pop(key, None)
+
+    def check(self, key, message):
+        """Count one attempt, or raise 429 if the key is over its limit."""
+        if self.blocked(key): raise HTTPException(429, message)
+        self.hit(key)
+
+def client_ip(request):
+    # behind a proxy, uvicorn's --proxy-headers puts the real visitor IP here
+    return request.client.host if request.client else "unknown"
 ORG: ContextVar[int] = ContextVar("org", default=0)   # organization of the current request
 b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 _sig = lambda msg: b64(hmac.new(SECRET, msg.encode(), hashlib.sha256).digest())

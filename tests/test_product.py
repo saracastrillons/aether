@@ -126,3 +126,35 @@ def test_engine_new_intents(client, admin):
                     ("¿Cuántos clientes tenemos?", "customers")]:
         a = client.post("/api/ask", headers=admin, json={"question": q}).json()["answer"]
         assert word.lower() in a.lower(), (q, a)
+
+
+# ---------- abuse protection ----------
+
+def _from(ip):
+    from fastapi.testclient import TestClient
+    from main import app
+    return TestClient(app, client=(ip, 50000))
+
+def test_failed_logins_cannot_lock_out_other_visitors():
+    attacker, visitor = _from("203.0.113.7"), _from("198.51.100.4")
+    codes = [attacker.post("/api/auth/login", json={"username": "demo", "password": "wrong"}).status_code for _ in range(6)]
+    assert codes[-1] == 429                                                    # the attacker is throttled...
+    assert visitor.post("/api/auth/login", json={"username": "demo", "password": "demo"}).status_code == 200   # ...everyone else is not
+
+def test_password_spraying_is_throttled_per_ip():
+    sprayer = _from("203.0.113.8")
+    codes = [sprayer.post("/api/auth/login", json={"username": f"user{i}", "password": "x"}).status_code for i in range(31)]
+    assert codes[-1] == 429
+
+def test_signups_are_limited_per_ip():
+    bot = _from("203.0.113.9")
+    codes = [bot.post("/api/auth/register", json={"org_name": f"Spam {i}", "username": f"spam{i}", "email": f"s{i}@x.io", "password": "supersecret"}).status_code
+             for i in range(11)]
+    assert codes[:10] == [200] * 10 and codes[10] == 429
+
+def test_demo_alerts_are_read_only_examples(client, admin):
+    names = {a["name"] for a in client.get("/api/alerts", headers=admin).json()}
+    assert {"Revenue drop over 10%", "Customer base below 3,000"} <= names
+    assert client.post("/api/alerts", headers=admin, json={"name": "spam", "metric": "mom_pct", "op": "<", "threshold": 0}).status_code == 403
+    first = client.get("/api/alerts", headers=admin).json()[0]["id"]
+    assert client.delete(f"/api/alerts/{first}", headers=admin).status_code == 403
