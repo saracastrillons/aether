@@ -10,9 +10,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/aether.css" />
+  <link rel="stylesheet" href="/static/css/aether.css?v=1.2.3" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
-  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/app.js?v=1.2.3" defer></script>
 </head>
 <body>
   <div class="noise" aria-hidden="true"></div>
@@ -205,10 +205,10 @@
       <div class="org-card"><div class="avatar" id="org-av"></div><div><b id="org-name"></b><small id="org-mode"></small></div></div>
       <nav class="side-nav" id="side-nav"></nav>
       <div class="side-foot">
-        <div class="me"><div class="avatar sm" id="me-av"></div><div><b id="me-name"></b><small id="me-role"></small></div></div>
-        <div class="side-actions">
-          <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"></button>
-          <button class="icon-btn" id="logout-btn" title="Sign out" aria-label="Sign out"></button>
+        <div class="me-row">
+          <div class="me"><div class="avatar sm" id="me-av"></div><div><b id="me-name"></b><small id="me-role"></small></div></div>
+          <button class="icon-btn ghost-ic" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"></button>
+          <button class="icon-btn ghost-ic" id="logout-btn" title="Sign out" aria-label="Sign out"></button>
         </div>
       </div>
     </aside>

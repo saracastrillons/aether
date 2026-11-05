@@ -277,7 +277,9 @@ function skeleton() {
 async function overviewData(force) { if (!S.D || force) S.D = await api("overview"); return S.D; }
 
 // ---------- charts ----------
-const PALETTE = () => [css("--violet2") || "#a78bfa", css("--cyan") || "#22d3ee", "#f472b6", "#fbbf24", "#60a5fa", "#34d399"];
+const PALETTE = () => document.documentElement.dataset.theme === "light"
+  ? ["#7c3aed", "#0284c7", "#4f46e5", "#0d9488", "#c026d3", "#d97706"]
+  : ["#a78bfa", "#38bdf8", "#818cf8", "#2dd4bf", "#e879f9", "#fbbf24"];
 function chartBase() {
   const mu = css("--mu"), line = css("--line"), font = css("--font").split(",")[0].replace(/"/g, "") || "Geist";
   Chart.defaults.font.family = `${font}, system-ui, sans-serif`; Chart.defaults.color = mu;
@@ -303,6 +305,38 @@ const fillGrad = (color, top = 0.35) => (c) => {
   const { chartArea: a, ctx } = c.chart; if (!a) return "transparent";
   const g = ctx.createLinearGradient(0, a.top, 0, a.bottom); g.addColorStop(0, rgba(color, top)); g.addColorStop(1, rgba(color, 0)); return g;
 };
+/* Shades the forecast horizon and marks "today" (the last actual month). */
+const forecastZone = (startIndex) => ({
+  id: "forecastZone",
+  beforeDatasetsDraw(chart) {
+    const { ctx, chartArea: a, scales: { x } } = chart; if (!a) return;
+    const x0 = x.getPixelForValue(startIndex), light = document.documentElement.dataset.theme === "light";
+    ctx.save();
+    const g = ctx.createLinearGradient(x0, 0, a.right, 0); g.addColorStop(0, light ? "rgba(8,145,178,.07)" : "rgba(34,211,238,.08)"); g.addColorStop(1, "rgba(34,211,238,0)");
+    ctx.fillStyle = g; ctx.fillRect(x0, a.top, a.right - x0, a.bottom - a.top);
+    ctx.setLineDash([3, 4]); ctx.strokeStyle = light ? "rgba(15,16,40,.25)" : "rgba(255,255,255,.22)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0, a.top); ctx.lineTo(x0, a.bottom); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = `600 10px ${css("--mono") || "monospace"}`; ctx.fillStyle = light ? "#0891b2" : "#67e8f9"; ctx.textBaseline = "top";
+    ctx.fillText("FORECAST →", x0 + 8, a.top + 4);
+    ctx.textAlign = "right"; ctx.fillStyle = css("--mu"); ctx.fillText("TODAY", x0 - 6, a.top + 4);
+    ctx.restore();
+  },
+});
+/* Draws a small pill above each anomaly point of the given dataset. */
+const anomalyLabels = (dsIndex, labels) => ({
+  id: "anomalyLabels",
+  afterDatasetsDraw(chart) {
+    const meta = chart.getDatasetMeta(dsIndex); if (!meta || meta.hidden) return;
+    const { ctx } = chart; ctx.save(); ctx.font = `600 10.5px ${css("--mono") || "monospace"}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    meta.data.forEach((pt, i) => {
+      const t = labels[i]; if (!t || pt.skip) return;
+      const w = ctx.measureText(t).width + 12, y = Math.max(chart.chartArea.top + 10, pt.y - 26);
+      ctx.fillStyle = "rgba(251,113,133,.95)"; ctx.beginPath(); ctx.roundRect(pt.x - w / 2, y - 9, w, 18, 9); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.fillText(t, pt.x, y + .5);
+    });
+    ctx.restore();
+  },
+});
 function mkChart(key, el, cfg) { S.charts[key]?.destroy(); S.charts[key] = new Chart(el, cfg); return S.charts[key]; }
 
 function spark(values, color, dashedFrom = null) {
@@ -323,7 +357,8 @@ function countUp(el, to, f, ms = 1100) {
   (function step(now) { const k = Math.min(1, (now - t0) / ms); el.textContent = f(to * (1 - Math.pow(1 - k, 4))); if (k < 1) requestAnimationFrame(step); })(t0);
 }
 
-const deltaHtml = (v, suffix = "") => v == null ? `<span class="delta"><span class="mu">needs 24 months of data</span></span>` : `<span class="delta ${v >= 0 ? "up" : "dn"}"><span class="delta-pill ${v >= 0 ? "up" : "dn"}">${v >= 0 ? "▲" : "▼"} ${fmt.pct(v).replace(/^[+−]/, "")}</span><span class="mu">${suffix}</span></span>`;
+const deltaHtml = (v, suffix = "") => v == null ? `<span class="delta"><span class="mu">needs 24 months of data</span></span>`
+  : `<span class="delta"><span class="delta-pill ${Math.abs(v) < 0.05 ? "" : v > 0 ? "up" : "dn"}">${Math.abs(v) < 0.05 ? "■" : v > 0 ? "▲" : "▼"} ${fmt.pct(Math.abs(v))}</span><span class="mu">${suffix}</span></span>`;
 
 // =========================================================================
 //  VIEW: OVERVIEW
@@ -339,11 +374,11 @@ VIEWS.overview = async (v) => {
   const ttm = sum(D.revenue.slice(-12));
   const P = PALETTE();
   const kpis = [
-    ["Revenue · trailing 12m", ttm, fmt.k, k.ytd_growth_pct, "vs prior 12m", spark(D.revenue.slice(-12), P[0])],
-    ["Last month", k.last_month, fmt.k, k.mom_pct, "MoM", spark(D.revenue.slice(-8), P[4])],
-    ["Active customers", k.customers, fmt.num, custMom, "MoM", spark(D.customers.slice(-12), P[1])],
-    ["Revenue per customer", k.arpu, (x) => "$" + x.toFixed(2), arpuMom, "MoM", spark(arpu.slice(-12), P[2])],
-    ["Forecast · " + ml(D.forecast.months[0]), k.next_month, fmt.k, (k.next_month / k.last_month - 1) * 100, "vs last", spark([...D.revenue.slice(-5), ...D.forecast.values], P[3], 4)],
+    ["Revenue · 12m", ttm, fmt.k, k.ytd_growth_pct, "vs prior 12m", spark(D.revenue.slice(-12), P[0]), "trend", P[0]],
+    ["Last month", k.last_month, fmt.k, k.mom_pct, "vs previous", spark(D.revenue.slice(-8), P[2]), "pulse", P[2]],
+    ["Customers", k.customers, fmt.num, custMom, "vs previous", spark(D.customers.slice(-12), P[1]), "users", P[1]],
+    ["Revenue / customer", k.arpu, (x) => "$" + x.toFixed(2), arpuMom, "vs previous", spark(arpu.slice(-12), P[3]), "product", P[3]],
+    ["Forecast · " + ml(D.forecast.months[0]), k.next_month, fmt.k, (k.next_month / k.last_month - 1) * 100, "vs last month", spark([...D.revenue.slice(-5), ...D.forecast.values], P[4], 4), "lab", P[4]],
   ];
   v.innerHTML = `<div class="vw">
     <div class="welcome">
@@ -354,20 +389,20 @@ VIEWS.overview = async (v) => {
         <a class="btn primary sm" href="#/analyst">${icon("spark")} Ask AETHER</a>
       </div>
     </div>
-    <div class="kpis">${kpis.map((x, i) => `<div class="card kpi"><div class="lbl"><span>${x[0]}</span></div><div class="val" id="k${i}">—</div>${deltaHtml(x[3], x[4])}<div class="spark">${x[5]}</div></div>`).join("")}</div>
+    <div class="kpis">${kpis.map((x, i) => `<div class="card kpi${i === 0 ? " kpi-hero" : ""}" style="--c:${x[7]}"><div class="lbl"><span>${x[0]}</span><span class="ki">${icon(x[6])}</span></div><div class="val" id="k${i}">—</div>${deltaHtml(x[3], x[4])}<div class="spark">${x[5]}</div></div>`).join("")}</div>
     <div class="g2">
-      <div class="card">
-        <div class="hd"><div><h3>Revenue &amp; forecast</h3><p>${esc(D.forecast.model)} · backtested MAPE ${D.forecast.mape}% · 90% prediction band</p></div>
+      <div class="card fill">
+        <div class="hd"><div><h3>${icon("forecast")} Revenue &amp; forecast</h3><p>${esc(D.forecast.model)} · backtested MAPE ${D.forecast.mape}% · 90% prediction band</p></div>
           <div class="legend"><span><i style="background:${P[0]}"></i>Revenue</span><span><i class="dash"></i>Forecast</span><span><i style="background:${rgba(P[1].startsWith("#") ? P[1] : "#22d3ee", .25)}"></i>90% band</span><span><i style="background:#fb7185;border-radius:50%"></i>Anomaly</span></div></div>
         <div class="chart-box"><canvas id="c-rev"></canvas></div>
       </div>
       <div class="card"><div class="hd"><div><h3>${icon("spark")} Key insights</h3><p>Computed from your data, refreshed on every change</p></div><span class="ai-badge">auto</span></div>
-        <div class="insights">${D.insights.map((x) => `<div class="ins ${x.tone}"><div class="ii">${icon(x.icon)}</div><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("") || '<p class="mu">Not enough history for insights yet.</p>'}</div>
+        <div class="insights">${D.insights.map((x) => `<div class="ins t-${x.tone}"><div class="ii">${icon(x.icon)}</div><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("") || '<p class="mu">Not enough history for insights yet.</p>'}</div>
       </div>
     </div>
     <div class="g2 eq">
-      <div class="card"><div class="hd"><div><h3>Revenue by region</h3><p>Stacked monthly contribution</p></div><div class="legend" id="lg-reg"></div></div><div class="chart-box sm"><canvas id="c-reg"></canvas></div></div>
-      <div class="card"><div class="hd"><div><h3>Product mix</h3><p>Share of revenue, last 12 months</p></div></div>
+      <div class="card"><div class="hd"><div><h3>${icon("region")} Revenue by region</h3><p>Stacked monthly contribution</p></div><div class="legend" id="lg-reg"></div></div><div class="chart-box sm"><canvas id="c-reg"></canvas></div></div>
+      <div class="card"><div class="hd"><div><h3>${icon("product")} Product mix</h3><p>Share of revenue, last 12 months</p></div></div>
         <div class="row" style="gap:24px;align-items:center;flex-wrap:nowrap">
           <div class="donut-wrap" style="width:200px;height:200px;flex:none"><canvas id="c-mix"></canvas><div class="donut-center"><div><b id="mix-total"></b><small>12-month revenue</small></div></div></div>
           <div class="list" id="mix-list" style="flex:1;min-width:0"></div>
@@ -375,9 +410,9 @@ VIEWS.overview = async (v) => {
       </div>
     </div>
     <div class="g2">
-      <div class="card"><div class="hd"><div><h3>Regional heatmap</h3><p>Revenue intensity by region and month · red marks the region behind an anomaly</p></div></div><div class="heat" id="heat"></div></div>
+      <div class="card"><div class="hd"><div><h3>${icon("db")} Regional heatmap</h3><p>Revenue by region and month, last 12 months</p></div></div><div class="heat" id="heat"></div><div class="heat-legend"><span>Low</span><i></i><span>High</span><i class="anom"></i><span>Region behind an anomaly</span></div></div>
       <div class="card"><div class="hd"><div><h3>${icon("pulse")} Anomalies</h3><p>Robust z-score on MoM growth (|z| &gt; 3.5)</p></div></div><div class="list" id="anoms"></div>
-        <div class="hd" style="margin:18px 0 8px"><div><h3>Data quality</h3></div></div>
+        <div class="hd" style="margin:18px 0 8px"><div><h3>${icon("shield")} Data quality</h3></div></div>
         <div class="row" style="gap:18px;flex-wrap:nowrap"><div class="ring-wrap"><div class="ring" style="--p:${D.quality.score}"></div><b>${D.quality.score}</b></div>
           <div class="list" style="flex:1"><div class="li"><span>Rows</span><b class="mono">${fmt.num(D.quality.rows)}</b></div><div class="li"><span>Months</span><b class="mono">${n}</b></div><div class="li"><span>Source</span><span class="tag ${D.data_mode === "real" ? "ok" : "vi"}">${D.data_mode === "real" ? "imported CSV" : "demo dataset"}</span></div></div></div>
       </div>
@@ -396,7 +431,8 @@ VIEWS.overview = async (v) => {
   const H = D.heatmap, all = H.rows.flatMap((r) => r.values), hmax = Math.max(...all), hmin = Math.min(...all);
   const flagged = new Set(D.anomalies.filter((a) => a.driver).map((a) => a.month + "|" + a.driver.region));
   $("#heat").innerHTML = `<div class="hr" style="--n:${H.months.length}"><span></span>${H.months.map((m) => `<span class="hm">${MN[+m.slice(5) - 1]}</span>`).join("")}</div>` +
-    H.rows.map((r) => `<div class="hr" style="--n:${H.months.length}"><span class="hl">${esc(r.label)}</span>${r.values.map((x, i) => `<span class="hc ${flagged.has(H.months[i] + "|" + r.label) ? "anom" : ""}" style="--a:${(0.1 + 0.85 * (x - hmin) / (hmax - hmin || 1)).toFixed(2)}" title="${esc(r.label)} · ${mlong(H.months[i])}: ${fmt.usd(x)}"></span>`).join("")}</div>`).join("");
+    H.rows.map((r) => `<div class="hr" style="--n:${H.months.length}"><span class="hl">${esc(r.label)}</span>${r.values.map((x, i) => { const a = 0.1 + 0.85 * (x - hmin) / (hmax - hmin || 1), an = flagged.has(H.months[i] + "|" + r.label);
+      return `<span class="hc ${an ? "anom hi" : a > 0.55 ? "hi" : ""}" style="--a:${a.toFixed(2)}" title="${esc(r.label)} · ${mlong(H.months[i])}: ${fmt.usd(x)}">${fmt.k(x).replace("$", "")}</span>`; }).join("")}</div>`).join("");
   // anomalies
   $("#anoms").innerHTML = D.anomalies.length ? D.anomalies.map((a) => `<div class="li"><div><b>${mlong(a.month)}</b> <span class="tag ${a.severity === "medium" ? "warn" : "bad"}">${a.severity}</span>
       <small>${fmt.pct(a.change_pct)} MoM · z = ${a.score}${a.driver ? ` · ${esc(a.driver.region)} ≈ ${a.driver.share}% of the move` : ""}</small></div>
@@ -421,6 +457,7 @@ function drawOverviewCharts() {
       { label: "Anomaly", data: vals.map((x, i) => (anomIdx.has(i) ? x : null)).concat(F.months.map(() => null)), showLine: false, pointRadius: 6, pointHoverRadius: 8, pointBackgroundColor: "#fb7185", pointBorderColor: rgba("#fb7185", 0.35), pointBorderWidth: 8, hideTip: false },
     ] },
     options: base,
+    plugins: [forecastZone(n - 1), anomalyLabels(4, vals.map((_, i) => { const a = anomIdx.has(i) && D.anomalies.find((x) => x.month === m[i]); return a ? fmt.pct(a.change_pct) : null; }))],
   });
   const regions = Object.keys(D.by_region);
   $("#lg-reg").innerHTML = regions.map((r, i) => `<span><i style="background:${P[i % 6]}"></i>${esc(r)}</span>`).join("");
@@ -583,7 +620,7 @@ function drawLab() {
     { label: "Forecast", data: pad(M.forecast), borderColor: "#22d3ee", borderDash: [6, 5], borderWidth: 2.2, tension: .3, pointRadius: (c) => (c.dataIndex >= n ? 3 : 0), pointBackgroundColor: "#22d3ee" },
     { label: "Upper (90%)", data: pad(M.upper), borderColor: "transparent", backgroundColor: "rgba(34,211,238,.13)", fill: "+1", pointRadius: 0, tension: .3 },
     { label: "Lower (90%)", data: pad(M.lower), borderColor: "transparent", pointRadius: 0, tension: .3 },
-  ] }, options: chartBase() });
+  ] }, options: chartBase(), plugins: [forecastZone(n - 1)] });
   const hold = L.holdout_size, win = L.months.slice(-(hold + 8)), act = L.revenue.slice(-(hold + 8)), off = win.length - hold;
   const order = Object.keys(L.models), cols = { ols_seasonal: "#a78bfa", holt: "#f472b6", seasonal_naive: "#fbbf24", naive: "#60a5fa" };
   $("#lg-bt").innerHTML = `<span><i style="background:${css("--tx")}"></i>Actual</span>` + order.map((m) => `<span style="opacity:${m === k ? 1 : .55}"><i style="background:${cols[m]}"></i>${esc(L.models[m].label)}</span>`).join("");
@@ -638,8 +675,8 @@ async function simulate() {
   if (!$("#c-sc")) return;
   $("#sc-asm").textContent = W.assumptions;
   const del = $("#sc-delta"), from = lastDelta; lastDelta = W.delta;
-  const t0 = performance.now(); (function s(now) { const k = Math.min(1, (now - t0) / 500), x = from + (W.delta - from) * (1 - Math.pow(1 - k, 3)); del.textContent = (x >= 0 ? "+" : "") + fmt.k(x); del.className = "big-num " + (x >= 0 ? "up" : "dn"); if (k < 1) requestAnimationFrame(s); })(t0);
-  $("#sc-pct").textContent = fmt.pct(W.delta_pct, 2); $("#sc-pct").className = "big-num " + (W.delta_pct >= 0 ? "up" : "dn");
+  const t0 = performance.now(); (function s(now) { const k = Math.min(1, (now - t0) / 500), x = from + (W.delta - from) * (1 - Math.pow(1 - k, 3)); del.textContent = (x >= 0 ? "+" : "") + fmt.k(x); del.className = "big-num " + (Math.abs(W.delta) < 1 ? "" : x >= 0 ? "up" : "dn"); if (k < 1) requestAnimationFrame(s); })(t0);
+  $("#sc-pct").textContent = fmt.pct(W.delta_pct, 2); $("#sc-pct").className = "big-num " + (Math.abs(W.delta_pct) < 0.005 ? "" : W.delta_pct >= 0 ? "up" : "dn");
   const base = chartBase(); base.animation = { duration: 400 };
   if (S.charts.sc) { const c = S.charts.sc; c.data.labels = W.months.map(ml); c.data.datasets[0].data = W.base; c.data.datasets[1].data = W.scenario; c.update(); }
   else mkChart("sc", $("#c-sc"), { type: "bar", data: { labels: W.months.map(ml), datasets: [
@@ -668,10 +705,10 @@ VIEWS.churn = async (v) => {
     $("#cust-tpl", v).onclick = async () => download("aether_customers_template.csv", await (await fetch("/api/templates/customers")).text());
     return;
   }
-  const metrics = [["ROC AUC", c.auc.toFixed(3), "Ranking quality, 0.5 = random"], ["Accuracy", c.accuracy + "%", "Correct predictions"], ["Precision", c.precision + "%", "Flagged that truly churn"], ["Recall", c.recall + "%", "Churners we catch"], ["F1 score", c.f1 + "%", "Precision/recall balance"]];
+  const metrics = [["ROC AUC", c.auc.toFixed(3), "Ranking quality, 0.5 = random", "trend"], ["Accuracy", c.accuracy + "%", "Correct predictions", "check"], ["Precision", c.precision + "%", "Flagged that truly churn", "search"], ["Recall", c.recall + "%", "Churners we catch", "users"], ["F1 score", c.f1 + "%", "Precision/recall balance", "sliders"]];
   v.innerHTML = `<div class="vw">
     <div class="notice">${icon("cpu")}<span>Trained on <b>${esc(c.source)}</b>: logistic regression fitted by gradient descent on ${c.train_size} customers and evaluated on a <b>${c.test_size}-customer holdout</b> never seen during training. Base churn rate ${c.base_rate}%.${c.source === "your customers" ? ` Risk scores cover your ${fmt.num(c.scored)} active customers.` : ""}</span></div>
-    <div class="metrics">${metrics.map((m) => `<div class="card metric"><small><span>${m[0]}</span></small><b>${m[1]}</b><small>${m[2]}</small></div>`).join("")}</div>
+    <div class="metrics">${metrics.map((m) => `<div class="card metric"><small><span>${m[0]}</span><span class="ki">${icon(m[3])}</span></small><b>${m[1]}</b><small>${m[2]}</small></div>`).join("")}</div>
     <div class="g3">
       <div class="card"><div class="hd"><div><h3>ROC curve</h3><p>True vs false positive rate across thresholds</p></div></div><div class="chart-box xs" style="height:220px"><canvas id="c-roc"></canvas></div></div>
       <div class="card"><div class="hd"><div><h3>Confusion matrix</h3><p>Holdout set · threshold 0.5</p></div></div>
@@ -819,7 +856,9 @@ VIEWS.alerts = async (v) => {
   const list = await api("alerts"); S.alerts = list;
   const w = can("write"), firing = list.filter((a) => a.firing).length;
   v.innerHTML = `<div class="vw">
-    <div class="metrics" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="card metric"><small>Active rules</small><b>${list.length}</b></div><div class="card metric"><small>Firing now</small><b class="${firing ? "dn" : "up"}">${firing}</b></div><div class="card metric"><small>Evaluated</small><b style="font-size:18px;margin-top:10px">on every refresh</b></div></div>
+    <div class="metrics" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="card metric"><small><span>Active rules</span><span class="ki">${icon("bell")}</span></small><b>${list.length}</b><small>KPI thresholds</small></div>
+      <div class="card metric"><small><span>Firing now</span><span class="ki">${icon("alert")}</span></small><b class="${firing ? "dn" : "up"}">${firing}</b><small>${firing ? "Needs attention" : "All clear"}</small></div>
+      <div class="card metric"><small><span>Evaluation</span><span class="ki">${icon("refresh")}</span></small><b style="font-size:20px;margin-top:8px">Live</b><small>On every data refresh</small></div></div>
     <div class="card"><div class="hd"><div><h3>${icon("bell")} Alert rules</h3><p>Compared against the latest KPIs of ${esc(S.sess.org)}</p></div></div>
       <div class="list">${list.length ? list.map((a) => `<div class="li"><div style="display:flex;gap:12px;align-items:center"><span class="dot ${a.firing ? "" : "live"}" style="${a.firing ? "background:var(--red);box-shadow:0 0 12px var(--red)" : ""}"></span>
           <div><b>${esc(a.name)}</b><small>${METRIC[a.metric]?.[0] || esc(a.metric)} ${esc(a.op)} ${fmtMetric(a.metric, a.threshold)} · current <span class="mono">${fmtMetric(a.metric, a.value)}</span></small></div></div>
@@ -895,7 +934,7 @@ VIEWS.report = async (v) => {
         <div><small>Active customers</small><b>${fmt.num(k.customers)}</b><span class="mu mono">ARPU $${k.arpu}</span></div>
         <div><small>Next quarter forecast</small><b>${fmt.k(sum(r.forecast.values))}</b><span class="mu mono">MAPE ${r.forecast.mape}%</span></div></div></section>
       <section class="rp-sec"><h4>Revenue trend &amp; outlook</h4><div class="chart-box sm"><canvas id="c-rp"></canvas></div></section>
-      <section class="rp-sec"><h4>Findings</h4><div class="insights">${r.insights.map((x) => `<div class="ins ${x.tone}"><div class="ii">${icon(x.icon)}</div><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("")}</div></section>
+      <section class="rp-sec"><h4>Findings</h4><div class="insights">${r.insights.map((x) => `<div class="ins t-${x.tone}"><div class="ii">${icon(x.icon)}</div><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("")}</div></section>
       ${r.anomalies.length ? `<section class="rp-sec"><h4>Root cause · ${mlong(r.anomalies.at(-1).month)}</h4><p>${md(r.insight)}</p></section>` : ""}
       <section class="rp-sec"><h4>Forecast detail</h4><table class="tbl"><thead><tr><th>Month</th><th class="num">Low (5%)</th><th class="num">Expected</th><th class="num">High (95%)</th></tr></thead><tbody>
         ${r.forecast.months.map((m, i) => `<tr><td>${mlong(m)}</td><td class="num">${fmt.usd(r.forecast.lower[i])}</td><td class="num"><b>${fmt.usd(r.forecast.values[i])}</b></td><td class="num">${fmt.usd(r.forecast.upper[i])}</td></tr>`).join("")}</tbody></table>
@@ -907,7 +946,7 @@ VIEWS.report = async (v) => {
     { label: "Revenue", data: [...r.revenue, ...F.months.map(() => null)], borderColor: "#7c3aed", backgroundColor: fillGrad("#7c3aed", .18), fill: true, tension: .35, pointRadius: 2, borderWidth: 2.2 },
     { label: "Forecast", data: pad(F.values), borderColor: "#0891b2", borderDash: [6, 5], tension: .3, pointRadius: 2, borderWidth: 2 },
     { label: "Upper", data: pad(F.upper), borderColor: "transparent", backgroundColor: "rgba(8,145,178,.12)", fill: "+1", pointRadius: 0 },
-    { label: "Lower", data: pad(F.lower), borderColor: "transparent", pointRadius: 0 }] }, options: base });
+    { label: "Lower", data: pad(F.lower), borderColor: "transparent", pointRadius: 0 }] }, options: base, plugins: [forecastZone(n - 1)] });
   $("#rp-copy").onclick = () => navigator.clipboard.writeText(`${r.title}\n\n${r.summary.replace(/\*\*/g, "")}\n\n` + r.insights.map((x) => `• ${x.title} — ${x.detail}`).join("\n")).then(() => toast("Summary copied"));
 };
 
