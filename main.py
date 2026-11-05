@@ -12,7 +12,7 @@ from security import auth, need, ORG, RateLimiter
 from orgs import guard_demo
 import analytics as an, assistant, ingest, orgs
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 STARTED = time.time()
 init_db(); orgs.seed()
 app = FastAPI(title="AETHER API", version=VERSION, description="Explainable AI business intelligence platform: "

@@ -3,7 +3,7 @@
    ========================================================================= */
 "use strict";
 
-const AUTHOR = { name: "Sara Castrillón", url: "https://github.com/saracastrillons" };
+const AUTHOR = { name: "saracastrillons", url: "https://github.com/saracastrillons" };
 
 // ---------- tiny helpers ----------
 const $ = (s, el = document) => el.querySelector(s);
