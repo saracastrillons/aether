@@ -1,6 +1,4 @@
-"""Analytics engine: forecasting models, backtesting, anomaly detection, churn model and automatic insights.
 
-Pure functions over plain Python lists / dicts, so they are easy to test and reuse."""
 import numpy as np
 
 # ---------- forecasting models ----------
